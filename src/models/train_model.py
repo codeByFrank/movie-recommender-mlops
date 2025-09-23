@@ -285,7 +285,7 @@ def main():
     # Step 7: Test predictions
     test_model_predictions(user_item_matrix, user_factors, item_factors, global_mean, user_means, movie_means)
     
-     # === MLflow ADD: log run, metrics, artifacts, and (optional) register model ===
+    # === MLflow ADD: log run, metrics, artifacts, and (optional) register model ===
     # log after your pipeline finishes
     with mlflow.start_run(run_name=f"svd-n{N_COMPONENTS}"):
         # Params you chose for this run

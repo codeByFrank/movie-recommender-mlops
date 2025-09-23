@@ -6,21 +6,32 @@ import zipfile
 from pathlib import Path
 
 def download_movielens_data():
-    """Download MovieLens 20M dataset - SIMPLE VERSION"""
+    """Download MovieLens 20M dataset - STREAMING with simple progress"""
+    import requests, math
+    from pathlib import Path
+
     print("Starting data download...")
-    
     url = "https://files.grouplens.org/datasets/movielens/ml-20m.zip"
     data_dir = Path("data/raw")
     data_dir.mkdir(parents=True, exist_ok=True)
-    
     zip_path = data_dir / "ml-20m.zip"
-    
-    # Download file if not exists
+
     if not zip_path.exists():
-        print("Downloading MovieLens 20M dataset... (this takes a few minutes)")
-        response = requests.get(url)
-        with open(zip_path, 'wb') as f:
-            f.write(response.content)
+        print("Downloading MovieLens 20M dataset... (1.5 GB)")
+        with requests.get(url, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 0))
+            chunk = 1024 * 1024  # 1 MB
+            done = 0
+            with open(zip_path, "wb") as f:
+                for part in r.iter_content(chunk_size=chunk):
+                    if part:
+                        f.write(part)
+                        done += len(part)
+                        if total:
+                            pct = math.floor(done * 100 / total)
+                            if pct % 5 == 0:  # print every ~5%
+                                print(f"... {pct}%")
         print("Download completed!")
     else:
         print("Dataset already downloaded!")

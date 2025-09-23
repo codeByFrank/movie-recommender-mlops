@@ -7,6 +7,20 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import pickle
 from pathlib import Path
 
+# === MLflow ADD: imports & experiment name ===
+import mlflow
+from mlflow.tracking import MlflowClient
+EXPERIMENT_NAME = "movie_reco_svd"
+mlflow.set_experiment(EXPERIMENT_NAME)
+    # === HYPERPARAMS (edit here only) ===
+N_COMPONENTS = 100     
+TEST_SIZE    = 0.2
+RANDOM_STATE = 42
+    # === END HYPERPARAMS ===
+# === MLflow ADD END ===
+
+
+
 def load_data_from_database():
     """Load data from SQLite database"""
     print("Loading data from database...")
@@ -71,20 +85,18 @@ def normalize_matrix_for_svd(user_item_matrix, global_mean):
     print("Matrix normalized (mean-centered)")
     return normalized_matrix
 
-def train_svd_model(normalized_matrix, n_components=50):
+def train_svd_model(normalized_matrix, n_components=None):
     """Train SVD collaborative filtering model on normalized data"""
+    if n_components is None:
+        n_components = N_COMPONENTS  # ← uses the top-level constant
     print(f"Training SVD model with {n_components} components...")
-    
-    # Initialize SVD
-    svd = TruncatedSVD(n_components=n_components, random_state=42)
-    
-    # Fit SVD on normalized matrix
+
+    svd = TruncatedSVD(n_components=n_components, random_state=RANDOM_STATE)
     user_factors = svd.fit_transform(normalized_matrix)
     item_factors = svd.components_
-    
+
     print("SVD model trained successfully!")
     print(f"Explained variance ratio: {svd.explained_variance_ratio_.sum():.3f}")
-    
     return svd, user_factors, item_factors
 
 def evaluate_model(data, user_item_matrix, user_factors, item_factors, global_mean, test_size=0.2):
@@ -246,10 +258,26 @@ def main():
     normalized_matrix = normalize_matrix_for_svd(user_item_matrix, global_mean)
     
     # Step 4: Train SVD model on normalized data
-    svd, user_factors, item_factors = train_svd_model(normalized_matrix, n_components=50)
+    svd, user_factors, item_factors = train_svd_model(normalized_matrix, n_components= N_COMPONENTS)# The above code
+    # is simply a
+    # comment in
+    # Python.
+    # Comments in
+    # Python start
+    # with a hash
+    # symbol (#) and
+    # are ignored by
+    # the
+    # interpreter
+    # when the code
+    # is executed.
+    # In this case,
+    # the comment is
+    # "50".
+    
     
     # Step 5: Evaluate model with baseline + SVD
-    metrics = evaluate_model(data, user_item_matrix, user_factors, item_factors, global_mean)
+    metrics = evaluate_model(data, user_item_matrix, user_factors, item_factors, global_mean, test_size=TEST_SIZE)
     
     # Step 6: Save model with baseline statistics
     save_model(svd, user_factors, item_factors, user_item_matrix, global_mean, user_means, movie_means)
@@ -257,9 +285,57 @@ def main():
     # Step 7: Test predictions
     test_model_predictions(user_item_matrix, user_factors, item_factors, global_mean, user_means, movie_means)
     
+     # === MLflow ADD: log run, metrics, artifacts, and (optional) register model ===
+    # log after your pipeline finishes
+    with mlflow.start_run(run_name=f"svd-n{N_COMPONENTS}"):
+        # Params you chose for this run
+        mlflow.log_params({
+            "n_components": N_COMPONENTS,
+            "test_size": TEST_SIZE,
+            "random_state": RANDOM_STATE
+        })
+        # Metrics (only if evaluation succeeded)
+        if metrics:
+            mlflow.log_metrics({
+                "rmse": float(metrics["rmse"]),
+                "mae": float(metrics["mae"]),
+                "predictions": int(metrics.get("predictions", 0))
+            })
+        # Artifacts: your saved files live in ./models
+        mlflow.log_artifacts("models", artifact_path="model")
+
+        # Model Registry (works because you started `mlflow server`)
+        client = MlflowClient()
+        try:
+            client.create_registered_model("movie_recommender_svd")
+        except Exception:
+            pass  # already exists is fine
+
+        run_id = mlflow.active_run().info.run_id
+        source_uri = mlflow.get_artifact_uri("model")
+        mv = client.create_model_version(
+            name="movie_recommender_svd",
+            source=source_uri,
+            run_id=run_id
+        )
+        # Move newest version to Staging so it's easy to find
+        try:
+            client.transition_model_version_stage(
+                name="movie_recommender_svd",
+                version=mv.version,
+                stage="Staging",
+                archive_existing_versions=True
+            )
+        except Exception:
+            pass
+    # === MLflow ADD END===
+    
     print("\n=== MODEL TRAINING COMPLETE ===")
     print("Model now uses: Global Mean + User Bias + Movie Bias + SVD")
     print("This should produce realistic rating predictions (0.5 - 5.0)")
+    
+    
+    
     
     return metrics
 

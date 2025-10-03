@@ -119,6 +119,67 @@ def get_popular_movies(n_movies: int = 10):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting popular movies: {str(e)}")
 
+@app.post("/train")
+def trigger_training():
+    """
+    Endpoint to trigger model retraining
+    Used by Airflow DAG for automated retraining
+    
+    Returns:
+        dict: Training status and metrics
+    """
+    try:
+        import subprocess
+        
+        # Run training script
+        result = subprocess.run(
+            ["python", "src/models/train_model.py"],
+            capture_output=True,
+            text=True,
+            timeout=3600  # 1 hour timeout
+        )
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Model retrained successfully",
+                "output": result.stdout[-500:]  # Last 500 chars
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Training failed",
+                "error": result.stderr[-500:]
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
+
+@app.get("/model/status")
+def get_model_status():
+    """
+    Check current model status and version
+    Used by Airflow to verify deployment
+    """
+    try:
+        models_dir = Path("models")
+        
+        if not models_dir.exists():
+            return {"status": "no_model", "message": "No trained model found"}
+        
+        # Check model files
+        model_files = list(models_dir.glob("*.pkl"))
+        latest_file = max(model_files, key=lambda p: p.stat().st_mtime)
+        
+        return {
+            "status": "ready",
+            "last_trained": latest_file.stat().st_mtime,
+            "model_files": [f.name for f in model_files]
+        }
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
 # Run the app - SIMPLE
 if __name__ == "__main__":
     import uvicorn

@@ -75,9 +75,6 @@ target/
 # Jupyter NB Checkpoints
 .ipynb_checkpoints/
 
-# exclude data from source control by default
-/data/
-
 # Mac OS-specific storage files
 .DS_Store
 
@@ -88,6 +85,13 @@ target/
 # Mypy cache
 .mypy_cache/
 
+# virtual envs
 .venv/
-models/
+
+# pickle artifacts
 *.pkl
+
+# ignore only top-level data & models artifacts
+/data/
+/models/
+mlruns/

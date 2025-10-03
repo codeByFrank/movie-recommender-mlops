@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import sqlite3
+import mysql.connector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -22,12 +22,15 @@ RANDOM_STATE = 42
 
 
 def load_data_from_database():
-    """Load data from SQLite database"""
     print("Loading data from database...")
     
-    # Connect to database
-    db_path = "data/movielens.db"
-    conn = sqlite3.connect(db_path)
+    # Connect to MySQL database
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='root',
+        password='mysql',
+        database='movielens'
+    )
     
     # Load ratings and movies
     query = """

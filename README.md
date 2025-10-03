@@ -1,14 +1,15 @@
-# Movie Recommendation System - Phase 1
+# Movie Recommendation System - Phase 2
 
 **Machine Learning Engineering Project**  
-**Team:** Frank Lee, Gustavo, Nicole Döhring  
+**Team:** Frank LEE, Gustavo SILVA BELLO, Nicole DÖHRING  
 **Mentor:** Vincent Lalanne  
 **Course:** DataScientest ML Engineering  
 **Duration:** September 15, 2025 - October 28, 2025 (5 phases)
 
 ## What We Built
 
-We created a **movie recommendation system** like Netflix. It suggests movies to users based on what they liked before.
+A **movie recommendation system** (Netflix-style). Users rate movies (1–5★), our SVD collaborative filtering model learns user & item factors, and the API returns recommendations / predictions.
+Cold-start is handled via a popularity fallback.
 
 **The system works like this:**
 
@@ -73,6 +74,7 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 │       └── predict_model.py    # Make recommendations
 ├── notebooks/
 │   └── data_exploration.ipynb  # Data analysis
+├── mlruns/                     # MLflow experiment tracking data
 ├── api_app.py                  # Web API server
 ├── requirements.txt            # Python packages needed
 └── README.md                   # This file
@@ -87,6 +89,14 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 pip install -r requirements.txt
 ```
 
+# Install MySQL Server:
+
+```bash
+Download MySQL (~400 MB)
+Create database named movielens
+Default credentials: user=root, password=mysql, host=localhost
+```
+
 ### Step 2: Create Database and Train Model
 
 ```bash
@@ -96,6 +106,15 @@ python src/data/create_database.py
 
 # Train the AI model
 python src/models/train_model.py
+```
+
+### Step 2a: Start the MLflow
+
+```bash
+# View experiments and model versions
+mlflow ui
+
+# Open browser: http://localhost:5000
 ```
 
 ### Step 3: Start the API
@@ -119,6 +138,12 @@ curl -X POST "http://localhost:8000/recommendations" \
 curl -X POST "http://localhost:8000/predict" \
      -H "Content-Type: application/json" \
      -d '{"user_id": 123, "movie_id": 456}'
+
+     # Trigger model training (Airflow integration)
+curl -X POST "http://localhost:8000/train"
+
+# Check model status
+curl -X GET "http://localhost:8000/model/status"
 ```
 
 ## Technical Details
@@ -162,6 +187,18 @@ curl -X POST "http://localhost:8000/predict" \
 - [x] **Data Analysis:** Jupyter notebook with visualizations and insights
 - [x] **Cold Start Handling:** Popular movies fallback for new users
 
+## Phase 2 Requirements ✅
+
+- [x] **MLflow Setup:** Experiment tracking integrated in training script
+- [x] **Model Versioning:** MLflow Registry for model version management
+- [x] **Performance Comparison:** Automatic comparison between model versions
+- [x] **Best Model Selection:** Flag best performing models in MLflow
+- [x] **MySQL Migration:** Database migrated from SQLite to MySQL
+- [x] **Docker Preparation:** MySQL configured for containerization
+- [x] **Airflow Integration Endpoints:**
+  - [x] **/train** - Trigger model training
+  - [x] **/model/status** - Get current model information
+
 ## Dependencies
 
 **Install command:**
@@ -169,6 +206,15 @@ curl -X POST "http://localhost:8000/predict" \
 ```bash
 pip install pandas numpy scikit-learn fastapi uvicorn matplotlib seaborn jupyter requests
 ```
+
+**Phase 2 additions:**
+
+```bash
+pip install mlflow mysql-connector-python
+```
+
+**External requirements**
+MySQL Server (~400 MB)
 
 ## Team Information
 

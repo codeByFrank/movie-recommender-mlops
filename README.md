@@ -55,29 +55,28 @@ Cold-start is handled via a popularity fallback.
 
 ```
 SEP25_BMLOPS_INT_MOVIE_RECO_2/
-├── data/
-│   ├── raw/ml-20m/              # Original MovieLens data
-│   ├── sample/                  # Small data for testing
-│   └── movielens.db             # SQLite database
-├── models/
-│   ├── svd_model.pkl           # Trained AI model
-│   ├── user_factors.pkl        # User preferences
-│   ├── item_factors.pkl        # Movie features
-│   ├── user_item_matrix.pkl    # Rating matrix
-│   └── baseline_stats.pkl      # Statistics for predictions
-├── src/
-│   ├── data/
-│   │   ├── make_dataset.py     # Download and process data
-│   │   └── create_database.py  # Setup database
-│   └── models/
-│       ├── train_model.py      # Train the AI model
-│       └── predict_model.py    # Make recommendations
-├── notebooks/
-│   └── data_exploration.ipynb  # Data analysis
-├── mlruns/                     # MLflow experiment tracking data
-├── api_app.py                  # Web API server
-├── requirements.txt            # Python packages needed
-└── README.md                   # This file
+recsys-mlops/
+├─ docker-compose.yml
+├─ .env                             # API_BASIC_USER/PASS, etc.
+├─ mysql-init/                      # SQL to create/seed movielens DB
+│  └─ 01_init.sql  ...             # schema + sample data
+├─ airflow/
+│  ├─ Dockerfile                    # airflow image with deps (mlflow, etc.)
+│  └─ dags/
+│     └─ retrain_on_new_batch.py    # DAG: generate batch → ingest → train → archive
+├─ api/
+│  ├─ Dockerfile                    # python:3.12-slim, installs fastapi, mlflow, etc.
+│  └─ main.py                       # FastAPI app (Basic Auth, endpoints, /health)
+├─ src/
+│  └─ models/
+│     ├─ train_model_mysql.py       # trains/logs/registers; auto-moves alias on better RMSE
+│     └─ predict_model.py           # loads @production model and implements business logic
+└─ models/                          # local pickles (optional fallback, also logged as artifacts)
+   ├─ svd_model.pkl
+   ├─ user_factors.pkl
+   ├─ item_factors.pkl
+   ├─ user_item_matrix.pkl
+   └─ baseline_stats.pkl
 ```
 
 ## How to Use the System

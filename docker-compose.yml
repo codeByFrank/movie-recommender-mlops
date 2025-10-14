@@ -1,0 +1,171 @@
+services:
+  api:
+    build: ./api
+    environment:
+      MLFLOW_DISABLE_ENV_CREATION: "true"
+      API_BASIC_USER: ${API_BASIC_USER:-admin}
+      API_BASIC_PASS: ${API_BASIC_PASS:-secret}
+
+      MODEL_URI: models:/movie_recommender_svd@production
+
+      PYTHONPATH: /opt/airflow/repo
+
+      # MLflow champion model
+      MLFLOW_TRACKING_URI: file:/opt/airflow/mlruns
+      MODEL_NAME: movie_recommender_svd
+
+      # DB config used by get_movie_info()/popular()
+      DB_HOST: mysql-ml
+      DB_USER: app
+      DB_PASS: mysql
+      DB_NAME: movielens
+    volumes:
+      # MOUNT YOUR WHOLE PROJECT ROOT if src/ is at the root:
+      - ./:/opt/airflow/repo
+      # share MLflow runs dir
+      - airflow_home:/opt/airflow
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql-ml:
+        condition: service_healthy
+      airflow-webserver:
+        condition: service_started
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    
+  mysql-ml:
+    image: mysql:8.0
+    container_name: mysql-ml
+    environment:
+      MYSQL_DATABASE: movielens
+      MYSQL_USER: app
+      MYSQL_PASSWORD: mysql
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uapp", "-pmysql"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  airflow-init:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: airflow-custom:latest
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      # App DB env for your DAGs
+      DATABASE_HOST: mysql-ml
+      DATABASE_PORT: "3306"
+      DATABASE_USER: app
+      DATABASE_PASSWORD: mysql
+      DATABASE_NAME: movielens
+      # Make your repo importable inside Airflow
+      PYTHONPATH: /opt/airflow/repo
+      # Keep MLflow local inside the airflow volume (avoids Windows path issues)
+      MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
+      # Silence git warnings from mlflow’s GitPython
+      GIT_PYTHON_REFRESH: "quiet"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./:/opt/airflow/repo
+      - airflow_home:/opt/airflow
+    command: >
+      bash -lc "airflow db init &&
+                airflow users create
+                  --role Admin
+                  --username recommender
+                  --password BestTeam
+                  --firstname Recomender
+                  --lastname Admin
+                  --email recomender@example.com"
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: airflow-custom:latest
+    depends_on:
+      mysql-ml:
+        condition: service_healthy
+      airflow-init:
+        condition: service_started
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      DATABASE_HOST: mysql-ml
+      DATABASE_PORT: "3306"
+      DATABASE_USER: app
+      DATABASE_PASSWORD: mysql
+      DATABASE_NAME: movielens
+      PYTHONPATH: /opt/airflow/repo
+      LANDING_DIR: /opt/airflow/repo/data/landing
+      GIT_PYTHON_REFRESH: "quiet"
+      MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./:/opt/airflow/repo
+      - airflow_home:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: ["bash","-c","airflow webserver"]
+
+  mlflow-ui:
+      image: airflow-custom:latest         # same image already has mlflow installed
+      depends_on:
+        - airflow-webserver
+      environment:
+        MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
+      volumes:
+        - airflow_home:/opt/airflow        # share MLflow runs directory
+      ports:
+        - "5000:5000"
+      command: 
+        [
+          "bash","-lc",
+          "mlflow ui --backend-store-uri file:/opt/airflow/mlruns --host 0.0.0.0 --port 5000"
+        ]
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: airflow-custom:latest
+    depends_on:
+      mysql-ml:
+        condition: service_healthy
+      airflow-init:
+        condition: service_started
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      DATABASE_HOST: mysql-ml
+      DATABASE_PORT: "3306"
+      DATABASE_USER: app
+      DATABASE_PASSWORD: mysql
+      DATABASE_NAME: movielens
+      PYTHONPATH: /opt/airflow/repo
+      LANDING_DIR: /opt/airflow/repo/data/landing
+      GIT_PYTHON_REFRESH: "quiet"
+      MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./:/opt/airflow/repo
+      - airflow_home:/opt/airflow
+    command: ["bash","-c","airflow scheduler"]
+
+volumes:
+  mysql_data:
+  airflow_home:

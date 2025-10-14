@@ -1,293 +1,423 @@
+# src/models/predict_model.py
+import os
+from pathlib import Path
 import pickle
 import numpy as np
-import sqlite3
-from pathlib import Path
-import os
+import mysql.connector
+import mlflow
+from mlflow.tracking import MlflowClient
+from mlflow.exceptions import MlflowException
+from mlflow.models import get_model_info
+
 
 class MovieRecommender:
-    """Movie recommender using baseline + SVD model"""
-    
     def __init__(self):
-        """Load the trained model with baseline statistics"""
-        self.models_loaded = False
-        self.load_models()
-    
-    
-    def load_models(self):
-        """Load all saved model components including baseline statistics"""
-        print("Loading trained models...")
-        
-        # FIXED: Finde models/ Ordner egal von wo das Skript ausgeführt wird 
+        mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "file:/opt/airflow/mlruns"))
+        self.model_name = os.getenv("MODEL_NAME", "movie_recommender_svd")
+        override_uri = os.getenv("MODEL_URI")  # e.g. models:/movie_recommender_svd@production
+
+        try:
+            uri = override_uri or f"models:/{self.model_name}@production"
+            print(f"[MovieRecommender] Loading model from URI: {uri}")
+            self.model = mlflow.pyfunc.load_model(uri)
+
+            # Health/metadata (alias-based)
+            client = MlflowClient()
+            self.models_loaded = True
+            self._mode = "mlflow"
+            self.model_stage = "alias:production"  # for display only
+
+            # Resolve exact version/run pinned by the alias
+            try:
+                mv = client.get_model_version_by_alias(self.model_name, "production")
+                self.model_version = mv.version
+                self.model_run_id = mv.run_id
+            except Exception:
+                # Fallback: ask the loaded artifact for its run_id if available
+                info = get_model_info(uri)
+                self.model_version = getattr(info, "version", None)
+                self.model_run_id = getattr(info, "run_id", None)
+
+        except MlflowException as e:
+            self.models_loaded = False
+            self._mode = None
+            self._load_error = str(e)
+            print(f"[MovieRecommender] MLflow load failed: {e}")
+    # ------------- DB helpers -------------
+    def _connect(self):
+        return mysql.connector.connect(
+            host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+        )
+
+    def _all_movie_ids(self):
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT movieId FROM movies")
+            return [int(r[0]) for r in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def _rated_movie_ids(self, user_id: int):
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT movieId FROM ratings WHERE userId=%s", (user_id,))
+            return {int(r[0]) for r in cur.fetchall()}
+        finally:
+            cur.close()
+            conn.close()
+
+    # ------------- Local fallback loader -------------
+    def _load_local_models(self):
         current_dir = Path.cwd()
-        
-        # Suche nach models/ Ordner im aktuellen oder Parent-Verzeichnis
         if (current_dir / "models").exists():
             models_dir = current_dir / "models"
         elif (current_dir.parent / "models").exists():
             models_dir = current_dir.parent / "models"
         else:
-            # Letzte Option: vom Skript-Verzeichnis aus
             script_dir = Path(__file__).parent
             models_dir = script_dir.parent.parent / "models"
-        
-        print(f"Current working directory: {current_dir}")
-        print(f"Using models directory: {models_dir.absolute()}")
-        print(f"Models directory exists: {models_dir.exists()}")
-        
+
         if not models_dir.exists():
-            print("❌ Models directory not found anywhere!")
-            self.models_loaded = False
-            return
-        
+            raise RuntimeError("Local models/ directory not found for fallback.")
+
+        with open(models_dir / "svd_model.pkl", "rb") as f:
+            self.svd = pickle.load(f)
+        with open(models_dir / "user_factors.pkl", "rb") as f:
+            self.user_factors = pickle.load(f)
+        with open(models_dir / "item_factors.pkl", "rb") as f:
+            self.item_factors = pickle.load(f)
+        with open(models_dir / "user_item_matrix.pkl", "rb") as f:
+            self.user_item_matrix = pickle.load(f)
+
         try:
-            # Rest des Codes bleibt gleich...
-            with open(models_dir / "svd_model.pkl", 'rb') as f:
-                self.svd = pickle.load(f)
+            with open(models_dir / "baseline_stats.pkl", "rb") as f:
+                baseline_stats = pickle.load(f)
+            self.global_mean = float(baseline_stats["global_mean"])
+            self.user_means = baseline_stats["user_means"]
+            self.movie_means = baseline_stats["movie_means"]
+        except FileNotFoundError:
+            self.global_mean = 3.5
+            self.user_means = {}
+            self.movie_means = {}
 
-            print(f"Current working directory: {models_dir / 'svd_model.pkl'}")
+        print("[MovieRecommender] Loaded local pickle models (fallback).")
 
-            # Load user factors
-            with open(models_dir / "user_factors.pkl", 'rb') as f:
-                self.user_factors = pickle.load(f)
-            
-
-            # Load item factors
-            with open(models_dir / "item_factors.pkl", 'rb') as f:
-                self.item_factors = pickle.load(f)
-            
-            # Load user-item matrix
-            with open(models_dir / "user_item_matrix.pkl", 'rb') as f:
-                self.user_item_matrix = pickle.load(f)
-            
-            # Load baseline statistics (NEW - this fixes the 0.00 problem)
-            try:
-                with open(models_dir / "baseline_stats.pkl", 'rb') as f:
-                    baseline_stats = pickle.load(f)
-                self.global_mean = baseline_stats['global_mean']
-                self.user_means = baseline_stats['user_means']
-                self.movie_means = baseline_stats['movie_means']
-                print(f"Loaded baseline statistics: global_mean={self.global_mean:.3f}")
-            except FileNotFoundError:
-                print("Warning: No baseline statistics found, using fallback values")
-                # Fallback if baseline stats don't exist
-                self.global_mean = 3.5
-                self.user_means = {}
-                self.movie_means = {}
-            
-            self.models_loaded = True
-            print("Models loaded successfully!")
-            
-        except FileNotFoundError as e:
-            print(f"Error: Model files not found: {e}")
-            print("Please run src/models/train_model.py first")
-            self.models_loaded = False
-    
-    def get_user_recommendations(self, user_id, n_recommendations=5):
-        """Get movie recommendations using baseline + SVD approach"""
-        
+    # ------------- Public API -------------
+    def predict_rating(self, user_id: int, movie_id: int):
+        """Predict rating using MLflow model if available, otherwise local fallback."""
         if not self.models_loaded:
             return {"error": "Models not loaded"}
-        
-        # Check if user exists in our training data
-        if user_id not in self.user_item_matrix.index:
-            print(f"User {user_id} not found, returning popular movies")
-            return self.get_popular_movies(n_recommendations)
-        
-        # Get user index and bias
-        user_idx = self.user_item_matrix.index.get_loc(user_id)
-        user_bias = self.user_means.get(user_id, self.global_mean) - self.global_mean
-        
-        # Calculate SVD predictions for all movies
-        user_vector = self.user_factors[user_idx]
-        svd_scores = np.dot(user_vector, self.item_factors)
-        
-        # Get movies the user hasn't rated yet
-        user_ratings = self.user_item_matrix.loc[user_id]
-        unrated_movies = user_ratings[user_ratings == 0].index
-        
-        # Create recommendations with baseline + SVD predictions
-        recommendations = []
-        movie_ids = self.user_item_matrix.columns
-        
-        for movie_id in unrated_movies:
-            movie_idx = movie_ids.get_loc(movie_id)
-            
-            # Movie bias
-            movie_bias = self.movie_means.get(movie_id, self.global_mean) - self.global_mean
-            
-            # SVD component
-            svd_component = svd_scores[movie_idx]
-            
-            # Final prediction: baseline + SVD (this is the Netflix approach)
-            predicted_rating = self.global_mean + user_bias + movie_bias + svd_component
-            
-            # Clamp to valid rating range
-            predicted_rating = max(0.5, min(5.0, predicted_rating))
-            
-            recommendations.append({
-                'movie_id': int(movie_id),
-                'predicted_rating': float(predicted_rating)
-            })
-        
-        # Sort by predicted rating (highest first)
-        recommendations.sort(key=lambda x: x['predicted_rating'], reverse=True)
-        
-        # Get top N recommendations with movie details
-        top_recommendations = recommendations[:n_recommendations]
-        
-        # Add movie titles and genres
-        for rec in top_recommendations:
-            movie_info = self.get_movie_info(rec['movie_id'])
-            rec.update(movie_info)
-        
-        return top_recommendations
-    
-    def predict_rating(self, user_id, movie_id):
-        """Predict rating using baseline + SVD approach"""
-        
-        if not self.models_loaded:
-            return {"error": "Models not loaded"}
-        
-        # Check if user and movie exist in our data
+
+        if self._mode == "mlflow":
+            pred = self.model.predict(np.array([[user_id, movie_id]], dtype=float)).item()
+            info = self.get_movie_info(movie_id)
+            return {
+                "user_id": int(user_id),
+                "movie_id": int(movie_id),
+                "predicted_rating": float(pred),
+                "title": info.get("title", "Unknown"),
+                "genres": info.get("genres", "Unknown"),
+                "served_by": "mlflow",
+            }
+
+        # Local SVD + baseline (fallback)
         if user_id not in self.user_item_matrix.index:
             return {"error": f"User {user_id} not found"}
-        
         if movie_id not in self.user_item_matrix.columns:
             return {"error": f"Movie {movie_id} not found"}
-        
-        # Get indices and biases
-        user_idx = self.user_item_matrix.index.get_loc(user_id)
-        movie_idx = self.user_item_matrix.columns.get_loc(movie_id)
-        
+
+        ui = self.user_item_matrix.index.get_loc(user_id)
+        mi = self.user_item_matrix.columns.get_loc(movie_id)
         user_bias = self.user_means.get(user_id, self.global_mean) - self.global_mean
         movie_bias = self.movie_means.get(movie_id, self.global_mean) - self.global_mean
-        
-        # Calculate SVD prediction
-        svd_prediction = np.dot(self.user_factors[user_idx], self.item_factors[:, movie_idx])
-        
-        # Final prediction: baseline + SVD
-        predicted_rating = self.global_mean + user_bias + movie_bias + svd_prediction
-        
-        # Clamp to valid rating range
-        predicted_rating = max(0.5, min(5.0, predicted_rating))
-        
-        # Get movie info
-        movie_info = self.get_movie_info(movie_id)
-        
+        svd_pred = np.dot(self.user_factors[ui], self.item_factors[:, mi])
+        pred = float(np.clip(self.global_mean + user_bias + movie_bias + svd_pred, 0.5, 5.0))
+        info = self.get_movie_info(movie_id)
         return {
-            'user_id': user_id,
-            'movie_id': movie_id,
-            'predicted_rating': float(predicted_rating),
-            'title': movie_info.get('title', 'Unknown'),
-            'genres': movie_info.get('genres', 'Unknown'),
-            'components': {
-                'global_mean': float(self.global_mean),
-                'user_bias': float(user_bias), 
-                'movie_bias': float(movie_bias),
-                'svd_component': float(svd_prediction)
-            }
+            "user_id": int(user_id),
+            "movie_id": int(movie_id),
+            "predicted_rating": pred,
+            "title": info.get("title", "Unknown"),
+            "genres": info.get("genres", "Unknown"),
+            "components": {
+                "global_mean": float(self.global_mean),
+                "user_bias": float(user_bias),
+                "movie_bias": float(movie_bias),
+                "svd_component": float(svd_pred),
+            },
+            "served_by": "local",
         }
-    
-    def get_movie_info(self, movie_id):
-        """Get movie title and genres from database"""
+
+    def get_user_recommendations(
+        self,
+        user_id: int,
+        n_recommendations: int = 5,
+        max_candidates: int = 5000,
+        batch_size: int = 2048,
+        min_popularity_count: int = 20,   # require at least N ratings to treat a movie as "popular"
+    ):
+        """
+        Recommend top-N items for a user.
+        - If running with an MLflow model, batch-score [user_id, movie_id] pairs.
+        - If the user is cold-start (no ratings), fall back to a popularity list.
+        - If MLflow isn't loaded, use the local SVD fallback.
+        Returns: List[ {movie_id, title, genres, predicted_rating} ]
+        """
+
+        if not getattr(self, "models_loaded", False):
+            return {"error": "Models not loaded"}
+
+        # ---- small helper: popularity fallback (for cold-start or empty candidates)
+        def _popular_from_db(limit: int):
+            try:
+                conn = mysql.connector.connect(
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                )
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT m.movieId, m.title, m.genres, AVG(r.rating) AS avg_rating, COUNT(*) AS c
+                    FROM ratings r
+                    JOIN movies m ON m.movieId = r.movieId
+                    GROUP BY m.movieId, m.title, m.genres
+                    HAVING c >= %s
+                    ORDER BY avg_rating DESC
+                    LIMIT %s
+                    """,
+                    (min_popularity_count, limit),
+                )
+                rows = cur.fetchall()
+            finally:
+                try:
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
+
+            return [
+                {
+                    "movie_id": int(mid),
+                    "title": title,
+                    "genres": genres,
+                    "predicted_rating": float(avg)
+                }
+                for (mid, title, genres, avg, _cnt) in rows
+            ]
+
+        # ---------- MLflow MODE ----------
+        if getattr(self, "_mode", None) == "mlflow":
+            # 0) Cold-start guard: does this user have any ratings?
+            try:
+                conn = mysql.connector.connect(
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                )
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM ratings WHERE userId=%s", (user_id,))
+                n_user_ratings = int(cur.fetchone()[0])
+            finally:
+                try:
+                    cur.close(); conn.close()
+                except Exception:
+                    pass
+
+            if n_user_ratings == 0:
+                # New user → popularity list
+                return _popular_from_db(n_recommendations)
+
+            # 1) Candidate set: movies this user hasn't rated yet
+            try:
+                conn = mysql.connector.connect(
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                )
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT m.movieId
+                    FROM movies m
+                    LEFT JOIN ratings r
+                    ON r.movieId = m.movieId AND r.userId = %s
+                    WHERE r.userId IS NULL
+                    LIMIT %s
+                    """,
+                    (user_id, max_candidates),
+                )
+                candidate_ids = [int(row[0]) for row in cur.fetchall()]
+            finally:
+                try:
+                    cur.close(); conn.close()
+                except Exception:
+                    pass
+
+            if not candidate_ids:
+                # Nothing unrated found (rare) → popularity fallback
+                return _popular_from_db(n_recommendations)
+
+            # 2) Batch predict [user_id, movie_id]
+            preds = []
+            X_all = np.array([[user_id, mid] for mid in candidate_ids], dtype=float)
+            for start in range(0, len(X_all), batch_size):
+                X = X_all[start:start + batch_size]
+                y = self.model.predict(X).reshape(-1)
+                for mid, score in zip(candidate_ids[start:start + batch_size], y):
+                    score = float(max(0.5, min(5.0, score)))
+                    preds.append((mid, score))
+
+            # 3) Top-N by score
+            preds.sort(key=lambda t: t[1], reverse=True)
+            top = preds[:n_recommendations]
+            if not top:
+                return _popular_from_db(n_recommendations)
+
+            # 4) Hydrate titles/genres in one go
+            try:
+                conn = mysql.connector.connect(
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                )
+                cur = conn.cursor()
+                placeholders = ",".join(["%s"] * len(top))
+                cur.execute(
+                    f"SELECT movieId, title, genres FROM movies WHERE movieId IN ({placeholders})",
+                    tuple(mid for mid, _ in top),
+                )
+                meta = {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
+            finally:
+                try:
+                    cur.close(); conn.close()
+                except Exception:
+                    pass
+
+            results = []
+            for mid, score in top:
+                title, genres = meta.get(mid, (f"Movie {mid}", "Unknown"))
+                results.append({
+                    "movie_id": mid,
+                    "title": title,
+                    "genres": genres,
+                    "predicted_rating": score
+                })
+            return results
+
+        # ---------- LOCAL SVD FALLBACK ----------
+        # (Uses the matrices loaded by _load_local_models)
+        if not hasattr(self, "user_item_matrix"):
+            return {"error": "Local model not available"}
+
+        # If the user is unknown locally, return popularity fallback
+        if user_id not in self.user_item_matrix.index:
+            return _popular_from_db(n_recommendations)
+
+        # Vectorized scoring for all movies, then drop those already rated
+        ui = self.user_item_matrix.index.get_loc(user_id)
+        user_bias = self.user_means.get(user_id, self.global_mean) - self.global_mean
+
+        # dot product with all items
+        svd_scores = np.dot(self.user_factors[ui], self.item_factors)
+
+        # base = global + user_bias + movie_bias
+        movie_biases = np.array([
+            self.movie_means.get(mid, self.global_mean) - self.global_mean
+            for mid in self.user_item_matrix.columns
+        ])
+        scores = self.global_mean + user_bias + movie_biases + svd_scores
+
+        # clamp to [0.5, 5.0]
+        scores = np.clip(scores, 0.5, 5.0)
+
+        # mask already-rated
+        rated_mask = self.user_item_matrix.iloc[ui].to_numpy() > 0
+        scores[rated_mask] = -np.inf
+
+        # top-N indices
+        top_idx = np.argpartition(-scores, range(min(n_recommendations, len(scores))))[:n_recommendations]
+        top_idx = top_idx[np.argsort(-scores[top_idx])]
+
+        top_movie_ids = [int(self.user_item_matrix.columns[i]) for i in top_idx if scores[i] != -np.inf]
+        top_scores    = [float(scores[i]) for i in top_idx if scores[i] != -np.inf]
+
+        if not top_movie_ids:
+            return _popular_from_db(n_recommendations)
+
+        # hydrate from DB
         try:
-            conn = sqlite3.connect("data/movielens.db")
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT title, genres FROM movies WHERE movieId = ?", (movie_id,))
-            result = cursor.fetchone()
-            
+            conn = mysql.connector.connect(
+                host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+            )
+            cur = conn.cursor()
+            placeholders = ",".join(["%s"] * len(top_movie_ids))
+            cur.execute(
+                f"SELECT movieId, title, genres FROM movies WHERE movieId IN ({placeholders})",
+                tuple(top_movie_ids),
+            )
+            meta = {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
+        finally:
+            try:
+                cur.close(); conn.close()
+            except Exception:
+                pass
+
+        results = []
+        for mid, score in zip(top_movie_ids, top_scores):
+            title, genres = meta.get(mid, (f"Movie {mid}", "Unknown"))
+            results.append({
+                "movie_id": mid,
+                "title": title,
+                "genres": genres,
+                "predicted_rating": score
+            })
+        return results
+
+    def get_movie_info(self, movie_id: int):
+        """Fetch title/genres from MySQL."""
+        try:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute("SELECT title, genres FROM movies WHERE movieId = %s", (movie_id,))
+            row = cur.fetchone()
+            cur.close()
             conn.close()
-            
-            if result:
-                return {
-                    'title': result[0],
-                    'genres': result[1]
-                }
-            else:
-                return {
-                    'title': f'Movie {movie_id}',
-                    'genres': 'Unknown'
-                }
-                
+            if row:
+                return {"title": row[0], "genres": row[1]}
+            return {"title": f"Movie {movie_id}", "genres": "Unknown"}
         except Exception as e:
             print(f"Error getting movie info: {e}")
-            return {
-                'title': f'Movie {movie_id}',
-                'genres': 'Unknown'
-            }
-    
-    def get_popular_movies(self, n_movies=5):
-        """Get popular movies as fallback"""
+            return {"title": f"Movie {movie_id}", "genres": "Unknown"}
+
+    def get_popular_movies(self, n_movies: int = 10):
+        """Return high-average, sufficiently-rated movies (DB-based)."""
         try:
-            conn = sqlite3.connect("data/movielens.db")
-            cursor = conn.cursor()
-            
-            # Get movies with highest average ratings (min 20 ratings)
-            cursor.execute("""
-                SELECT m.movieId, m.title, m.genres, AVG(r.rating) as avg_rating, COUNT(r.rating) as num_ratings
-                FROM movies m
-                JOIN ratings r ON m.movieId = r.movieId
-                GROUP BY m.movieId
-                HAVING num_ratings >= 20
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT m.movieId, m.title, m.genres,
+                       AVG(r.rating) AS avg_rating, COUNT(*) AS cnt
+                FROM ratings r
+                JOIN movies m ON r.movieId = m.movieId
+                GROUP BY m.movieId, m.title, m.genres
+                HAVING cnt >= 20
                 ORDER BY avg_rating DESC
-                LIMIT ?
-            """, (n_movies,))
-            
-            results = []
-            for row in cursor.fetchall():
-                results.append({
-                    'movie_id': row[0],
-                    'title': row[1],
-                    'genres': row[2],
-                    'avg_rating': round(row[3], 2),
-                    'num_ratings': row[4],
-                    'predicted_rating': row[3]  # Use avg rating as prediction
-                })
-            
+                LIMIT %s
+                """,
+                (n_movies,),
+            )
+            rows = cur.fetchall()
+            cur.close()
             conn.close()
-            return results
-            
+
+            return [
+                {
+                    "movie_id": int(r[0]),
+                    "title": r[1],
+                    "genres": r[2],
+                    "avg_rating": float(round(r[3], 2)),
+                    "num_ratings": int(r[4]),
+                    "predicted_rating": float(r[3]),
+                }
+                for r in rows
+            ]
         except Exception as e:
             print(f"Error getting popular movies: {e}")
             return []
-
-def test_predictions():
-    """Test the recommender system"""
-    print("=== TESTING MOVIE RECOMMENDER ===")
-    
-    # Create recommender
-    recommender = MovieRecommender()
-    
-    if not recommender.models_loaded:
-        print("Cannot test - models not loaded")
-        return
-    
-    # Test with first user in our data
-    sample_user = recommender.user_item_matrix.index[0]
-    print(f"\nGetting recommendations for user {sample_user}:")
-    
-    recommendations = recommender.get_user_recommendations(sample_user, 3)
-    
-    for i, rec in enumerate(recommendations, 1):
-        print(f"{i}. {rec['title']} - {rec['genres']}")
-        print(f"   Predicted rating: {rec['predicted_rating']:.2f}")
-    
-    # Test rating prediction with component breakdown
-    sample_movie = recommender.user_item_matrix.columns[0]
-    print(f"\nPredicting rating for user {sample_user}, movie {sample_movie}:")
-    
-    prediction = recommender.predict_rating(sample_user, sample_movie)
-    if 'error' not in prediction:
-        print(f"Predicted rating: {prediction['predicted_rating']:.2f}")
-        print(f"Movie: {prediction['title']}")
-        print("Components breakdown:")
-        comp = prediction['components']
-        print(f"  - Global mean: {comp['global_mean']:.3f}")
-        print(f"  - User bias: {comp['user_bias']:.3f}")
-        print(f"  - Movie bias: {comp['movie_bias']:.3f}")  
-        print(f"  - SVD component: {comp['svd_component']:.3f}")
-        print(f"  - Total: {comp['global_mean'] + comp['user_bias'] + comp['movie_bias'] + comp['svd_component']:.3f}")
-
-if __name__ == "__main__":
-    test_predictions()

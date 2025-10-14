@@ -82,69 +82,55 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 
 ## How to Use the System
 
-### Step 1: Setup
+0) Pre-requisites:
+  -Docker Desktop (includes Docker Compose)
 
-```bash
-# Install required packages
-pip install -r requirements.txt
-```
+    Windows: enable WSL2 backend during install
 
-# Install MySQL Server:
+  -Git (to clone the repo)
 
-```bash
-Download MySQL (~400 MB)
-Create database named movielens
-Default credentials: user=root, password=mysql, host=localhost
-```
+if fresh repo + empty DB:
+# run once, inside the api container (idempotent)
+docker compose exec api python -m src.models.create_database_mysql   # or your actual module path
 
-### Step 2: Create Database and Train Model
 
-```bash
-# Download data and create database
-python src/data/make_dataset.py
-python src/data/create_database.py
+1) Clone the repo
 
-# Train the AI model
-python src/models/train_model.py
-```
+2) Create a .env with this code:
+    # API basic auth
+    API_BASIC_USER=admin
+    API_BASIC_PASS=secret
 
-### Step 2a: Start the MLflow
+    # MLflow (experiment tracking & model registry)
+    MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
+    MODEL_URI=models:/movie_recommender_svd@production
 
-```bash
-# View experiments and model versions
-mlflow ui
+    # MySQL (database)
+    DB_HOST=mysql-ml
+    DB_USER=app
+    DB_PASS=mysql
+    DB_NAME=movielens
 
-# Open browser: http://localhost:5000
-```
+3) Start the stack - in terminal:
+docker compose up -d
+docker compose ps
 
-### Step 3: Start the API
+4) Verify UIs are reachable
 
-```bash
-# Start web server
-python api_app.py
+  API docs (FastAPI): http://localhost:8000/docs
 
-# Open browser: http://localhost:8000/docs
-```
+  MLflow UI: http://localhost:5000
 
-### Step 4: Test Recommendations
+  Airflow UI: http://localhost:8080
 
-```bash
-# Get 5 movie recommendations for user 123
-curl -X POST "http://localhost:8000/recommendations" \
-     -H "Content-Type: application/json" \
-     -d '{"user_id": 123, "n_recommendations": 5}'
+5) First training run (creates/updates the model in the registry), run:
 
-# Predict rating for user 123 and movie 456
-curl -X POST "http://localhost:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"user_id": 123, "movie_id": 456}'
+  docker compose exec api python -m src.models.train_model_mysql
 
-     # Trigger model training (Airflow integration)
-curl -X POST "http://localhost:8000/train"
+6) Confirm the API sees the promoted model
+  curl http://localhost:8000/health
 
-# Check model status
-curl -X GET "http://localhost:8000/model/status"
-```
+
 
 ## Technical Details
 
@@ -198,6 +184,25 @@ curl -X GET "http://localhost:8000/model/status"
 - [x] **Airflow Integration Endpoints:**
   - [x] **/train** - Trigger model training
   - [x] **/model/status** - Get current model information
+
+## Phase 3
+
+- [x] implement MLflow locally for monitoring training experiments and model registry.
+- [x] integrate MLflow to track metrics and logs in the training script.
+- [x] prepare for future transition from SQLite to a proper SQL database.
+- [x] implement automation using Airflow or another tool to collect new data and trigger model training automatically.
+- simulate new data arrival by either splitting the CSV file into multiple parts or applying random sampling on the training set.
+
+-[x] implement dockerization of the application components.
+    [x] create a Docker Compose file to orchestrate the Docker images.
+    [x] create a custom Docker file for the API component.
+
+## Phase 4
+-[x] modify the Airflow DAG to request the training endpoint of the API 
+-[x]instead of running the Python script directly.
+-[x]implement the Streamlit application as the frontend interface for the prediction pipeline.
+-[x]ensure the API uses the best model for predictions.
+
 
 ## Dependencies
 

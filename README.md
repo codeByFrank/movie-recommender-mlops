@@ -118,6 +118,8 @@ docker compose ps
 4) Verify UIs are reachable
 
   API docs (FastAPI): http://localhost:8000/docs
+      User: admin
+      Password: secret
 
   MLflow UI: http://localhost:5000
 

@@ -30,3 +30,5 @@ evidently>=0.4.0
 pymysql        
 psycopg2-binary
 mysql-connector-python
+python-dotenv
+SQLAlchemy>=2.0.0

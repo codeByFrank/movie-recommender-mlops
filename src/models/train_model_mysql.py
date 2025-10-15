@@ -1,346 +1,261 @@
-import pandas as pd
+# src/models/train_model_mysql.py
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import pickle
 import numpy as np
-import mysql.connector
+import pandas as pd
+from sqlalchemy import create_engine, text
 from sklearn.decomposition import TruncatedSVD
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-import pickle
-from pathlib import Path
 
-# === MLflow ADD: imports & experiment name ===
-import mlflow
-from mlflow.tracking import MlflowClient
-EXPERIMENT_NAME = "movie_reco_svd"
-mlflow.set_experiment(EXPERIMENT_NAME)
-    # === HYPERPARAMS (edit here only) ===
-N_COMPONENTS = 100     
-TEST_SIZE    = 0.2
+# ---------- MLflow setup (container-safe) ----------
+AIRFLOW_HOME = os.getenv("AIRFLOW_HOME", "/opt/airflow")
+os.environ["MLFLOW_TRACKING_URI"] = f"file:{AIRFLOW_HOME}/mlruns"
+os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
+
+import mlflow  # noqa: E402
+import mlflow.pyfunc  # noqa: E402
+from mlflow.tracking import MlflowClient  # noqa: E402
+
+mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+mlflow.set_experiment("movie_reco_svd")
+MODEL_NAME = "movie_recommender_svd"
+BEST_TAG_KEY = "best_rmse"  # tag stored on the registered model
+
+# ---------- DB config (Docker network) ----------
+DB_HOST = os.getenv("DATABASE_HOST", "mysql-ml")
+DB_PORT = os.getenv("DATABASE_PORT", "3306")
+DB_USER = os.getenv("DATABASE_USER", "app")
+DB_PASS = os.getenv("DATABASE_PASSWORD", "mysql")
+DB_NAME = os.getenv("DATABASE_NAME", "movielens")
+
+
+def _engine():
+    uri = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    return create_engine(uri)
+
+
+# ---------- Hyperparams ----------
+N_COMPONENTS = 100
+TEST_SIZE = 0.20
 RANDOM_STATE = 42
-    # === END HYPERPARAMS ===
-# === MLflow ADD END ===
 
 
-
-def load_data_from_database():
+# ---------- Data loading ----------
+def load_data_from_database() -> pd.DataFrame:
     print("Loading data from database...")
-    
-    # Connect to MySQL database
-    conn = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='mysql',
-        database='movielens'
-    )
-    
-    # Load ratings and movies
-    query = """
-    SELECT r.userId, r.movieId, r.rating, m.title, m.genres
-    FROM ratings r
-    JOIN movies m ON r.movieId = m.movieId
-    """
-    
-    data = pd.read_sql_query(query, conn)
-    conn.close()
-    
+    eng = _engine()
+    with eng.connect() as conn:
+        _ = conn.execute(text("SHOW TABLES")).fetchall()
+        query = """
+        SELECT r.userId, r.movieId, r.rating, m.title, m.genres
+        FROM ratings r
+        JOIN movies m ON r.movieId = m.movieId
+        """
+        data = pd.read_sql_query(text(query), conn)
     print(f"Loaded {len(data):,} ratings from database")
     return data
 
-def create_user_item_matrix(data):
-    """Create user-item rating matrix - FIXED for better SVD performance"""
+
+def create_user_item_matrix(data: pd.DataFrame):
     print("Creating user-item matrix...")
-    
-    # Create pivot table: users as rows, movies as columns, ratings as values
     user_item_matrix = data.pivot_table(
-        index='userId',
-        columns='movieId', 
-        values='rating',
-        fill_value=0
+        index="userId", columns="movieId", values="rating", fill_value=0
     )
-    
     print(f"Matrix shape: {user_item_matrix.shape}")
-    print(f"Users: {len(user_item_matrix.index)}")
-    print(f"Movies: {len(user_item_matrix.columns)}")
-    
-    # Calculate baseline statistics for later normalization
-    global_mean = data['rating'].mean()
-    user_means = data.groupby('userId')['rating'].mean()
-    movie_means = data.groupby('movieId')['rating'].mean()
-    
+    global_mean = data["rating"].mean()
+    user_means = data.groupby("userId")["rating"].mean()
+    movie_means = data.groupby("movieId")["rating"].mean()
     print(f"Global rating mean: {global_mean:.3f}")
-    
     return user_item_matrix, global_mean, user_means, movie_means
 
-def normalize_matrix_for_svd(user_item_matrix, global_mean):
-    """Normalize the matrix for better SVD performance"""
+
+def normalize_matrix_for_svd(user_item_matrix: pd.DataFrame, global_mean: float):
     print("Normalizing matrix for SVD...")
-    
-    # Create a copy for SVD training
-    normalized_matrix = user_item_matrix.copy()
-    
-    # Replace 0s with global mean for SVD training
-    # This prevents SVD from learning that missing = 0
-    mask = normalized_matrix == 0
-    normalized_matrix[mask] = global_mean
-    
-    # Mean-center the data (subtract global mean)
-    normalized_matrix = normalized_matrix - global_mean
-    
-    print("Matrix normalized (mean-centered)")
-    return normalized_matrix
+    normalized = user_item_matrix.copy()
+    normalized[normalized == 0] = global_mean  # fill empties with mean
+    normalized = normalized - global_mean      # mean-center
+    return normalized
 
-def train_svd_model(normalized_matrix, n_components=None):
-    """Train SVD collaborative filtering model on normalized data"""
-    if n_components is None:
-        n_components = N_COMPONENTS  # ← uses the top-level constant
+
+# ---------- Modeling ----------
+def train_svd_model(normalized_matrix: pd.DataFrame, n_components: int | None = None):
+    n_components = n_components or N_COMPONENTS
     print(f"Training SVD model with {n_components} components...")
-
     svd = TruncatedSVD(n_components=n_components, random_state=RANDOM_STATE)
     user_factors = svd.fit_transform(normalized_matrix)
     item_factors = svd.components_
-
-    print("SVD model trained successfully!")
-    print(f"Explained variance ratio: {svd.explained_variance_ratio_.sum():.3f}")
+    print("SVD model trained.")
     return svd, user_factors, item_factors
 
-def evaluate_model(data, user_item_matrix, user_factors, item_factors, global_mean, test_size=0.2):
-    """Evaluate model with proper baseline + SVD predictions"""
-    print("Evaluating model with baseline + SVD...")
-    
-    # Split data into train/test
+
+def evaluate_model(
+    data, user_item_matrix, user_factors, item_factors, global_mean, test_size=TEST_SIZE
+):
+    print("Evaluating model (baseline + SVD)...")
     train_data, test_data = train_test_split(
-        data, 
-        test_size=test_size, 
-        random_state=42
+        data, test_size=test_size, random_state=RANDOM_STATE
     )
-    
-    # Calculate user and movie biases from training data
-    train_global_mean = train_data['rating'].mean()
-    train_user_bias = train_data.groupby('userId')['rating'].mean() - train_global_mean
-    train_movie_bias = train_data.groupby('movieId')['rating'].mean() - train_global_mean
-    
-    predictions = []
-    actuals = []
-    
-    # Make predictions for test set
-    for _, row in test_data.head(1000).iterrows():  # Test on first 1000 for speed
-        try:
-            user_id = row['userId']
-            movie_id = row['movieId']
-            actual_rating = row['rating']
-            
-            # Check if user and movie are in our matrix
-            if user_id in user_item_matrix.index and movie_id in user_item_matrix.columns:
-                user_idx = user_item_matrix.index.get_loc(user_id)
-                item_idx = user_item_matrix.columns.get_loc(movie_id)
-                
-                # Get biases
-                user_bias = train_user_bias.get(user_id, 0)
-                movie_bias = train_movie_bias.get(movie_id, 0)
-                
-                # Calculate SVD prediction
-                svd_prediction = np.dot(user_factors[user_idx], item_factors[:, item_idx])
-                
-                # Final prediction: global mean + biases + SVD
-                predicted_rating = train_global_mean + user_bias + movie_bias + svd_prediction
-                
-                # Clamp to valid rating range
-                predicted_rating = max(0.5, min(5.0, predicted_rating))
-                
-                predictions.append(predicted_rating)
-                actuals.append(actual_rating)
-                
-        except Exception as e:
-            continue
-    
-    if len(predictions) > 0:
-        # Calculate metrics
-        mse = mean_squared_error(actuals, predictions)
-        mae = mean_absolute_error(actuals, predictions)
-        rmse = np.sqrt(mse)
-        
-        print(f"Model Evaluation Results:")
-        print(f"- RMSE: {rmse:.4f}")
-        print(f"- MAE: {mae:.4f}")
-        print(f"- Predictions made: {len(predictions)}")
-        print(f"- Average prediction: {np.mean(predictions):.3f}")
-        print(f"- Prediction range: {np.min(predictions):.3f} to {np.max(predictions):.3f}")
-        
-        return {'rmse': rmse, 'mae': mae, 'predictions': len(predictions)}
-    else:
-        print("Could not make any predictions for evaluation")
+    train_global_mean = train_data["rating"].mean()
+    train_user_bias = train_data.groupby("userId")["rating"].mean() - train_global_mean
+    train_movie_bias = train_data.groupby("movieId")["rating"].mean() - train_global_mean
+
+    preds, actuals = [], []
+    # cap for speed
+    for _, row in test_data.head(1000).iterrows():
+        u, m, y = int(row["userId"]), int(row["movieId"]), float(row["rating"])
+        if u in user_item_matrix.index and m in user_item_matrix.columns:
+            ui = user_item_matrix.index.get_loc(u)
+            mi = user_item_matrix.columns.get_loc(m)
+            ub = float(train_user_bias.get(u, 0.0))
+            mb = float(train_movie_bias.get(m, 0.0))
+            svd_pred = float(np.dot(user_factors[ui], item_factors[:, mi]))
+            yhat = max(0.5, min(5.0, train_global_mean + ub + mb + svd_pred))
+            preds.append(yhat)
+            actuals.append(y)
+
+    if not preds:
+        print("No predictions made for evaluation.")
         return None
 
-def save_model(svd, user_factors, item_factors, user_item_matrix, global_mean, user_means, movie_means):
-    """Save trained model with baseline statistics"""
-    print("Saving model and baseline statistics...")
-    
-    # Create models directory
+    mse = mean_squared_error(actuals, preds)
+    mae = mean_absolute_error(actuals, preds)
+    rmse = float(np.sqrt(mse))
+    print(f"RMSE={rmse:.4f}  MAE={float(mae):.4f}  n={len(preds)}")
+    return {"rmse": rmse, "mae": float(mae), "predictions": int(len(preds))}
+
+
+def save_pickles(
+    svd, user_factors, item_factors, user_item_matrix, global_mean, user_means, movie_means
+) -> Path:
+    """Persist the components locally; returns the folder path."""
+    print("Saving model artifacts to models/ ...")
     models_dir = Path("models")
     models_dir.mkdir(exist_ok=True)
-    
-    # Save model components
-    with open(models_dir / "svd_model.pkl", 'wb') as f:
-        pickle.dump(svd, f)
-        
-    with open(models_dir / "user_factors.pkl", 'wb') as f:
-        pickle.dump(user_factors, f)
-        
-    with open(models_dir / "item_factors.pkl", 'wb') as f:
-        pickle.dump(item_factors, f)
-        
-    with open(models_dir / "user_item_matrix.pkl", 'wb') as f:
-        pickle.dump(user_item_matrix, f)
-    
-    # Save baseline statistics for proper predictions
-    baseline_stats = {
-        'global_mean': global_mean,
-        'user_means': user_means,
-        'movie_means': movie_means
+    (models_dir / "svd_model.pkl").write_bytes(pickle.dumps(svd))
+    (models_dir / "user_factors.pkl").write_bytes(pickle.dumps(user_factors))
+    (models_dir / "item_factors.pkl").write_bytes(pickle.dumps(item_factors))
+    (models_dir / "user_item_matrix.pkl").write_bytes(pickle.dumps(user_item_matrix))
+    baseline = {
+        "global_mean": float(global_mean),
+        "user_means": user_means,
+        "movie_means": movie_means,
     }
-    
-    with open(models_dir / "baseline_stats.pkl", 'wb') as f:
-        pickle.dump(baseline_stats, f)
-    
-    print("Model and baseline statistics saved to models/ directory")
+    (models_dir / "baseline_stats.pkl").write_bytes(pickle.dumps(baseline))
+    return models_dir
 
-def test_model_predictions(user_item_matrix, user_factors, item_factors, global_mean, user_means, movie_means):
-    """Test the model with proper baseline + SVD predictions"""
-    print("Testing model predictions with baseline...")
-    
-    # Get a random user
-    sample_user = user_item_matrix.index[0]
-    user_idx = 0
-    
-    # Calculate SVD scores for all movies for this user
-    svd_scores = np.dot(user_factors[user_idx], item_factors)
-    
-    # Get user's existing ratings
-    user_ratings = user_item_matrix.iloc[user_idx]
-    unrated_movies = user_ratings[user_ratings == 0].index
-    
-    # Get user bias
-    user_bias = user_means.get(sample_user, 0) - global_mean
-    
-    # Get top 5 predictions for unrated movies
-    recommendations = []
-    for movie_id in unrated_movies:
-        movie_idx = user_item_matrix.columns.get_loc(movie_id)
-        
-        # Movie bias
-        movie_bias = movie_means.get(movie_id, 0) - global_mean
-        
-        # SVD component
-        svd_component = svd_scores[movie_idx]
-        
-        # Final prediction
-        predicted_rating = global_mean + user_bias + movie_bias + svd_component
-        predicted_rating = max(0.5, min(5.0, predicted_rating))
-        
-        recommendations.append((movie_id, predicted_rating))
-    
-    # Sort by prediction and get top 5
-    recommendations.sort(key=lambda x: x[1], reverse=True)
-    top_5 = recommendations[:5]
-    
-    print(f"Sample recommendations for user {sample_user}:")
-    print(f"User bias: {user_bias:.3f}, Global mean: {global_mean:.3f}")
-    for i, (movie_id, score) in enumerate(top_5, 1):
-        print(f"{i}. Movie ID {movie_id}: Predicted Rating {score:.3f}")
 
+# ---------- MLflow PyFunc wrapper ----------
+class SVDRecommender(mlflow.pyfunc.PythonModel):
+    def load_context(self, context):
+        with open(context.artifacts["svd_model"], "rb") as f:
+            self.svd = pickle.load(f)
+        with open(context.artifacts["user_factors"], "rb") as f:
+            self.user_factors = pickle.load(f)
+        with open(context.artifacts["item_factors"], "rb") as f:
+            self.item_factors = pickle.load(f)
+        with open(context.artifacts["user_item_matrix"], "rb") as f:
+            self.user_item_matrix = pickle.load(f)
+        with open(context.artifacts["baseline_stats"], "rb") as f:
+            bs = pickle.load(f)
+        self.global_mean = bs["global_mean"]
+        self.user_means = bs["user_means"]
+        self.movie_means = bs["movie_means"]
+
+    # expects a 2D array [[user_id, movie_id], ...] and returns 1D np.array
+    def predict(self, context, model_input):
+        # ensure numpy array
+        X = np.asarray(model_input, dtype=float)
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+
+        out = np.zeros(X.shape[0], dtype=float)
+        for i, (user_id, movie_id) in enumerate(X[:, :2].astype(int)):
+            if (
+                user_id not in self.user_item_matrix.index
+                or movie_id not in self.user_item_matrix.columns
+            ):
+                out[i] = float(self.global_mean)
+                continue
+
+            ui = self.user_item_matrix.index.get_loc(user_id)
+            mi = self.user_item_matrix.columns.get_loc(movie_id)
+            user_bias = self.user_means.get(user_id, self.global_mean) - self.global_mean
+            movie_bias = self.movie_means.get(movie_id, self.global_mean) - self.global_mean
+            svd_pred = float(np.dot(self.user_factors[ui], self.item_factors[:, mi]))
+            pred = float(self.global_mean + user_bias + movie_bias + svd_pred)
+            out[i] = max(0.5, min(5.0, pred))
+        return out
+
+
+# ---------- Train entry ----------
 def main():
-    """Main training function with fixes"""
     print("=== TRAINING MOVIE RECOMMENDATION MODEL ===")
-    
-    # Step 1: Load data from database
     data = load_data_from_database()
-    
-    # Step 2: Create user-item matrix and calculate baselines
-    user_item_matrix, global_mean, user_means, movie_means = create_user_item_matrix(data)
-    
-    # Step 3: Normalize matrix for SVD
-    normalized_matrix = normalize_matrix_for_svd(user_item_matrix, global_mean)
-    
-    # Step 4: Train SVD model on normalized data
-    svd, user_factors, item_factors = train_svd_model(normalized_matrix, n_components= N_COMPONENTS)# The above code
-    # is simply a
-    # comment in
-    # Python.
-    # Comments in
-    # Python start
-    # with a hash
-    # symbol (#) and
-    # are ignored by
-    # the
-    # interpreter
-    # when the code
-    # is executed.
-    # In this case,
-    # the comment is
-    # "50".
-    
-    
-    # Step 5: Evaluate model with baseline + SVD
-    metrics = evaluate_model(data, user_item_matrix, user_factors, item_factors, global_mean, test_size=TEST_SIZE)
-    
-    # Step 6: Save model with baseline statistics
-    save_model(svd, user_factors, item_factors, user_item_matrix, global_mean, user_means, movie_means)
-    
-    # Step 7: Test predictions
-    test_model_predictions(user_item_matrix, user_factors, item_factors, global_mean, user_means, movie_means)
-    
-    # === MLflow ADD: log run, metrics, artifacts, and (optional) register model ===
-    # log after your pipeline finishes
-    with mlflow.start_run(run_name=f"svd-n{N_COMPONENTS}"):
-        # Params you chose for this run
-        mlflow.log_params({
-            "n_components": N_COMPONENTS,
-            "test_size": TEST_SIZE,
-            "random_state": RANDOM_STATE
-        })
-        # Metrics (only if evaluation succeeded)
-        if metrics:
-            mlflow.log_metrics({
-                "rmse": float(metrics["rmse"]),
-                "mae": float(metrics["mae"]),
-                "predictions": int(metrics.get("predictions", 0))
-            })
-        # Artifacts: your saved files live in ./models
-        mlflow.log_artifacts("models", artifact_path="model")
+    uim, gmean, umeans, mmeans = create_user_item_matrix(data)
+    norm = normalize_matrix_for_svd(uim, gmean)
+    svd, uf, if_ = train_svd_model(norm, n_components=N_COMPONENTS)
+    metrics = evaluate_model(data, uim, uf, if_, gmean, test_size=TEST_SIZE)
 
-        # Model Registry (works because you started `mlflow server`)
+    # Save local copies (also used for PyFunc artifacts)
+    out_dir = save_pickles(svd, uf, if_, uim, gmean, umeans, mmeans)
+
+    # ---------- MLflow logging + registry (alias based) ----------
+    with mlflow.start_run(run_name=f"svd-n{N_COMPONENTS}") as run:
+        run_id = run.info.run_id
+        mlflow.log_params(
+            {"n_components": N_COMPONENTS, "test_size": TEST_SIZE, "random_state": RANDOM_STATE}
+        )
+        if metrics:
+            mlflow.log_metrics(metrics)
+
+        # Log a real MLflow model at artifact_path="model"
+        mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=SVDRecommender(),
+            artifacts={
+                "svd_model": str(out_dir / "svd_model.pkl"),
+                "user_factors": str(out_dir / "user_factors.pkl"),
+                "item_factors": str(out_dir / "item_factors.pkl"),
+                "user_item_matrix": str(out_dir / "user_item_matrix.pkl"),
+                "baseline_stats": str(out_dir / "baseline_stats.pkl"),
+            },
+        )
+
         client = MlflowClient()
         try:
-            client.create_registered_model("movie_recommender_svd")
-        except Exception:
-            pass  # already exists is fine
-
-        run_id = mlflow.active_run().info.run_id
-        source_uri = mlflow.get_artifact_uri("model")
-        mv = client.create_model_version(
-            name="movie_recommender_svd",
-            source=source_uri,
-            run_id=run_id
-        )
-        # Move newest version to Staging so it's easy to find
-        try:
-            client.transition_model_version_stage(
-                name="movie_recommender_svd",
-                version=mv.version,
-                stage="Staging",
-                archive_existing_versions=True
-            )
+            client.create_registered_model(MODEL_NAME)
         except Exception:
             pass
-    # === MLflow ADD END===
-    
-    print("\n=== MODEL TRAINING COMPLETE ===")
-    print("Model now uses: Global Mean + User Bias + Movie Bias + SVD")
-    print("This should produce realistic rating predictions (0.5 - 5.0)")
-    
-    
-    
-    
+
+        # Register the just-logged model
+        mv = client.create_model_version(
+            name=MODEL_NAME,
+            source=f"runs:/{run_id}/model",
+            run_id=run_id,
+        )
+
+        # Decide if it becomes the new production (alias) by RMSE
+        this_rmse = float(metrics["rmse"]) if metrics else float("inf")
+        current_best = None
+        try:
+            reg = client.get_registered_model(MODEL_NAME)
+            if BEST_TAG_KEY in reg.tags:
+                current_best = float(reg.tags[BEST_TAG_KEY])
+        except Exception:
+            pass
+
+        if (current_best is None) or (this_rmse < current_best):
+            # Move alias "production" to this version (no service restart required)
+            client.set_registered_model_alias(MODEL_NAME, "production", str(mv.version))
+            client.set_registered_model_tag(MODEL_NAME, BEST_TAG_KEY, f"{this_rmse}")
+
+    print("=== MODEL TRAINING COMPLETE ===")
     return metrics
+
 
 if __name__ == "__main__":
     main()

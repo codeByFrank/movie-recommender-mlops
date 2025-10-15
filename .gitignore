@@ -95,3 +95,7 @@ target/
 /data/
 /models/
 mlruns/
+
+
+# data/landing/.gitignore and data/processed/.gitignore
+*.csv

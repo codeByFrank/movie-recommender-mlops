@@ -1,98 +1,72 @@
 # src/data/create_database_mysql.py
+from __future__ import annotations
 
-print("DEBUG: running create_database_mysql.py")
-print("DEBUG: file path:", __file__)
-
-from pathlib import Path
+import argparse
 import os
 import sys
+import time
 import traceback
+from pathlib import Path
+
 import pandas as pd
 from dotenv import load_dotenv
-
 import mysql.connector as mc
 from mysql.connector import Error
 
-# ---------- Config & helpers ----------
 
-ROOT = Path.cwd()
+# ---------- Config ----------
+ROOT = Path("/opt/airflow/repo") if Path("/opt/airflow/repo").exists() else Path.cwd()
 ENV_FILE = ROOT / ".env"
-load_dotenv(dotenv_path=ENV_FILE)
+if ENV_FILE.exists():
+    load_dotenv(dotenv_path=ENV_FILE)
 
 DB_HOST = os.getenv("DATABASE_HOST", "mysql-ml")
 DB_PORT = int(os.getenv("DATABASE_PORT", "3306"))
-DB_USER = os.getenv("DATABASE_USER", "app")     # recommended non-root user
+DB_USER = os.getenv("DATABASE_USER", "app")
 DB_PASS = os.getenv("DATABASE_PASSWORD", "mysql")
 DB_NAME = os.getenv("DATABASE_NAME", "movielens")
 
-SAMPLE_DIR = ROOT / "data" / "sample"
-BATCH_SIZE = 1_000  # insert chunk size
 
+# ---------- MySQL helpers ----------
 def connect_server():
-    """
-    Connect to the MySQL *server* (no DB selected).
-    Returns a connection or None.
-    """
-    print("Connecting to MySQL server...")
-    print(f"→ host={DB_HOST} port={DB_PORT} user={DB_USER}")
+    """Connect to MySQL server (no DB selected yet)."""
     try:
         conn = mc.connect(
             host=DB_HOST,
             port=DB_PORT,
             user=DB_USER,
             password=DB_PASS,
-            connection_timeout=5,   # fail fast
+            connection_timeout=5,
             autocommit=False,
-            ssl_disabled=True,      # avoid Windows SSL quirks
-            use_pure=True
+            ssl_disabled=True,
+            use_pure=True,
         )
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
             _ = cur.fetchone()
-        print("✅ Connected to MySQL server")
         return conn
-    except Error as e:
-        print(f"❌ MySQL Error while connecting: {e}")
     except Exception as e:
-        print(f"❌ Unexpected Error while connecting: {repr(e)}")
+        print(f"❌ Connect error: {e}")
         traceback.print_exc()
-    return None
+        return None
+
 
 def ensure_database(conn, db_name: str):
-    """
-    Ensure target database exists and can be used.
-    Some users may not have CREATE DATABASE privilege; we handle that gracefully.
-    """
-    try:
-        with conn.cursor() as cur:
-            # Try to create if not exists (ok if user has global CREATE)
-            try:
-                cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
-                print(f"Database '{db_name}' ready (created or already exists).")
-            except Error as e:
-                # If we lack privilege, it's fine as long as the DB already exists
-                print(f"ℹ️ Could not CREATE DATABASE (likely privilege): {e}")
+    """Ensure database exists and select it."""
+    with conn.cursor() as cur:
+        try:
+            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}`")
+        except Error as e:
+            print(f"ℹ️ CREATE DATABASE may be restricted: {e}")
+        cur.execute("SHOW DATABASES LIKE %s", (db_name,))
+        if not cur.fetchone():
+            print(f"❌ Database '{db_name}' not found and cannot be created.")
+            sys.exit(1)
+        cur.execute(f"USE `{db_name}`")
 
-            # Verify it exists and switch to it
-            cur.execute(f"SHOW DATABASES LIKE %s", (db_name,))
-            found = cur.fetchone()
-            if not found:
-                print(f"❌ Database '{db_name}' does not exist and could not be created.")
-                print("   → Start your MySQL container with -e MYSQL_DATABASE=movielens or grant CREATE privilege.")
-                sys.exit(1)
-
-            cur.execute(f"USE `{db_name}`")
-            print(f"Switched to database '{db_name}'.")
-    except Exception as e:
-        print(f"❌ Error ensuring database '{db_name}': {e}")
-        traceback.print_exc()
-        sys.exit(1)
 
 def create_tables(conn):
-    """
-    Create required tables with appropriate keys and indexes.
-    """
-    print("Creating tables with keys...")
+    """Create tables if missing (idempotent)."""
     movies_sql = """
         CREATE TABLE IF NOT EXISTS movies (
             movieId INT PRIMARY KEY,
@@ -101,7 +75,6 @@ def create_tables(conn):
             INDEX idx_title (title(100))
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
-
     ratings_sql = """
         CREATE TABLE IF NOT EXISTS ratings (
             userId    INT NOT NULL,
@@ -110,158 +83,168 @@ def create_tables(conn):
             timestamp INT NOT NULL,
             PRIMARY KEY (userId, movieId, timestamp),
             FOREIGN KEY (movieId) REFERENCES movies(movieId)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            INDEX idx_user   (userId),
-            INDEX idx_movie  (movieId),
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            INDEX idx_user (userId),
+            INDEX idx_movie (movieId),
             INDEX idx_rating (rating)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
+    with conn.cursor() as cur:
+        cur.execute(movies_sql)
+        cur.execute(ratings_sql)
+    conn.commit()
 
-    try:
-        with conn.cursor() as cur:
-            cur.execute(movies_sql)
-            print("Table 'movies' ready.")
-            cur.execute(ratings_sql)
-            print("Table 'ratings' ready.")
-        conn.commit()
-        print("✅ All tables created successfully.")
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Error creating tables: {e}")
-        traceback.print_exc()
-        sys.exit(1)
 
-def load_sample_data(conn):
+# ---------- Data loaders ----------
+def load_movies(conn, movies_csv: Path):
+    """Upsert movies (idempotent)."""
+    df = pd.read_csv(movies_csv)
+    need = {"movieId", "title", "genres"}
+    if not need.issubset(df.columns):
+        missing = need - set(df.columns)
+        raise SystemExit(f"movies CSV missing {missing}")
+
+    rows = [(int(r.movieId), str(r.title), str(r.genres)) for _, r in df.iterrows()]
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO movies (movieId, title, genres) VALUES (%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE title=VALUES(title), genres=VALUES(genres)",
+            rows,
+        )
+    conn.commit()
+    print(f"✅ Loaded/updated {len(rows):,} movies")
+
+
+def _normalize_ratings_chunk(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Load sample CSVs (movies_sample.csv, ratings_sample.csv) into MySQL.
+    Normalize a ratings chunk:
+    - Ensure required columns exist (userId, movieId, rating).
+    - If 'timestamp' is missing, synthesize it from common date columns or 'now'.
+    - Enforce numeric types, drop rows with nulls after coercion.
     """
-    print("Loading sample data into database...")
+    # normalize headers (trim spaces)
+    df.columns = [c.strip() for c in df.columns]
 
-    if not SAMPLE_DIR.exists():
-        print("❌ No sample data found! Run: python -m src.data.make_dataset")
-        sys.exit(1)
+    REQUIRED = {"userId", "movieId", "rating"}
+    missing_required = REQUIRED - set(df.columns)
+    if missing_required:
+        raise SystemExit(f"ratings CSV missing required columns: {missing_required}")
 
-    movies_csv  = SAMPLE_DIR / "movies_sample.csv"
-    ratings_csv = SAMPLE_DIR / "ratings_sample.csv"
+    # create timestamp if missing (try to parse from common date-ish columns)
+    if "timestamp" not in df.columns:
+        for cand in ("datetime", "date", "rated_at", "created_at"):
+            if cand in df.columns:
+                parsed = pd.to_datetime(df[cand], errors="coerce", utc=True)
+                if parsed.notna().any():
+                    df["timestamp"] = (parsed.view("int64") // 10**9)
+                    break
+        else:
+            df["timestamp"] = int(time.time())
 
-    if not movies_csv.exists() or not ratings_csv.exists():
-        print("❌ Sample CSVs missing in data/sample/. Run: python -m src.data.make_dataset")
-        sys.exit(1)
+    # enforce numeric types
+    df["userId"] = pd.to_numeric(df["userId"], errors="coerce").astype("Int64")
+    df["movieId"] = pd.to_numeric(df["movieId"], errors="coerce").astype("Int64")
+    df["rating"] = pd.to_numeric(df["rating"], errors="coerce").astype(float)
+    df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce").astype("Int64")
 
-    try:
-        movies_df  = pd.read_csv(movies_csv)
-        ratings_df = pd.read_csv(ratings_csv)
-    except Exception as e:
-        print(f"❌ Could not read sample CSVs: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+    # drop rows with missing key fields after coercion
+    df = df.dropna(subset=["userId", "movieId", "rating", "timestamp"]).copy()
 
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SET FOREIGN_KEY_CHECKS=0")
-            cur.execute("TRUNCATE TABLE ratings")
-            cur.execute("TRUNCATE TABLE movies")
-            cur.execute("SET FOREIGN_KEY_CHECKS=1")
+    # cast back to primitive ints for MySQL driver
+    df["userId"] = df["userId"].astype(int)
+    df["movieId"] = df["movieId"].astype(int)
+    df["timestamp"] = df["timestamp"].astype(int)
 
-            # Movies
-            print(f"Inserting {len(movies_df):,} movies...")
-            movie_rows = [
-                (int(r.movieId), str(r.title), str(r.genres))
-                for _, r in movies_df.iterrows()
-            ]
-            cur.executemany(
-                "INSERT INTO movies (movieId, title, genres) VALUES (%s, %s, %s)",
-                movie_rows
+    return df
+
+
+def ingest_batch(conn, ratings_csv: Path, chunk: int = 100_000):
+    """
+    Append ratings from a CSV in chunks (idempotent via INSERT IGNORE).
+    Accepts CSVs missing 'timestamp' (will synthesize).
+    """
+    total = 0
+    # chunked read; let pandas detect encoding & BOM
+    for chunk_df in pd.read_csv(ratings_csv, chunksize=chunk):
+        chunk_df = _normalize_ratings_chunk(chunk_df)
+
+        if chunk_df.empty:
+            continue
+
+        rows = list(
+            zip(
+                chunk_df["userId"].tolist(),
+                chunk_df["movieId"].tolist(),
+                chunk_df["rating"].astype(float).tolist(),
+                chunk_df["timestamp"].tolist(),
             )
-            print("✅ Movies inserted.")
+        )
 
-            # Ratings (batched)
-            print(f"Inserting {len(ratings_df):,} ratings in batches of {BATCH_SIZE}...")
-            rating_rows = [
-                (int(r.userId), int(r.movieId), float(r.rating), int(r.timestamp))
-                for _, r in ratings_df.iterrows()
-            ]
-            for i in range(0, len(rating_rows), BATCH_SIZE):
-                batch = rating_rows[i:i+BATCH_SIZE]
-                cur.executemany(
-                    "INSERT INTO ratings (userId, movieId, rating, timestamp) VALUES (%s, %s, %s, %s)",
-                    batch
-                )
-                print(f"  → {min(i+BATCH_SIZE, len(rating_rows)):,}/{len(rating_rows):,}")
-
-        conn.commit()
-        print("✅ Sample data loaded successfully.")
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Error loading data: {e}")
-        traceback.print_exc()
-        sys.exit(1)
-
-def test_database(conn):
-    """
-    Quick sanity checks & a few example queries.
-    """
-    print("\nTesting database...")
-    try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM movies")
-            movie_count = cur.fetchone()[0]
+            cur.executemany(
+                "INSERT IGNORE INTO ratings (userId, movieId, rating, timestamp) VALUES (%s,%s,%s,%s)",
+                rows,
+            )
+        conn.commit()
 
-            cur.execute("SELECT COUNT(*) FROM ratings")
-            rating_count = cur.fetchone()[0]
+        total += len(chunk_df)
+        print(f"  → processed {total:,} rows")
 
-            cur.execute("SELECT AVG(rating) FROM ratings")
-            avg_rating = cur.fetchone()[0]
+    print(f"✅ Ingested batch rows processed: {total:,}")
 
-            print(f"- Movies in DB : {movie_count:,}")
-            print(f"- Ratings in DB: {rating_count:,}")
-            print(f"- Avg rating   : {avg_rating:.2f}" if avg_rating is not None else "- Avg rating   : N/A")
 
-            cur.execute("""
-                SELECT m.title, AVG(r.rating) AS avg_rating, COUNT(*) AS n
-                FROM ratings r
-                JOIN movies m ON m.movieId = r.movieId
-                GROUP BY m.movieId, m.title
-                ORDER BY n DESC
-                LIMIT 5
-            """)
-            rows = cur.fetchall()
-            print("\nTop 5 most rated movies:")
-            for i, (title, ar, n) in enumerate(rows, 1):
-                print(f"  {i}. {title} — {ar:.2f} ({n} ratings)")
+def test_counts(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM movies")
+        m = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM ratings")
+        r = cur.fetchone()[0]
+    print(f"Movies: {m:,}  Ratings: {r:,}")
 
-        print("✅ Test queries ran successfully.")
-    except Exception as e:
-        print(f"❌ Error testing database: {e}")
-        traceback.print_exc()
-        sys.exit(1)
 
-# ---------- Main ----------
-
+# ---------- CLI ----------
 def main():
-    print("=== SETTING UP MYSQL MOVIE DATABASE ===")
-    print("\nIMPORTANT: Make sure your container is up (docker ps shows mysql-ml Up) and .env is correct.\n")
+    p = argparse.ArgumentParser(description="MySQL setup & ingestion helper")
+    p.add_argument("--init-schema", action="store_true", help="Create DB/tables only")
+    p.add_argument("--load-movies", type=str, help="Path to movies.csv to upsert")
+    p.add_argument("--batch-csv", type=str, help="Path to ratings batch CSV to append (idempotent)")
+    args = p.parse_args()
 
     conn = connect_server()
     if not conn:
-        print("Failed to connect to MySQL. Exiting...")
         sys.exit(1)
 
     try:
         ensure_database(conn, DB_NAME)
+        # Always ensure tables exist before any data operation
         create_tables(conn)
-        load_sample_data(conn)
-        test_database(conn)
-        print("\n=== MYSQL DATABASE SETUP COMPLETE ✅ ===")
-        print("Next step: train the model:  python -m src.models.train_model_mysql")
+
+        did_something = False
+
+        if args.init_schema:
+            did_something = True
+
+        if args.load_movies:
+            load_movies(conn, Path(args.load_movies))
+            did_something = True
+
+        if args.batch_csv:
+            ingest_batch(conn, Path(args.batch_csv))
+            did_something = True
+
+        if not did_something:
+            print("Nothing to do. Use --init-schema and/or --load-movies and/or --batch-csv.")
+            sys.exit(2)
+
+        test_counts(conn)
+
     finally:
         try:
             if conn.is_connected():
                 conn.close()
-                print("\nMySQL connection closed")
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     main()

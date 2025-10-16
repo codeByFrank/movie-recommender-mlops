@@ -113,7 +113,7 @@ def main():
     sample_ratings, sample_movies = create_sample_data(ratings, movies)
     
     print("\n=== DATA PROCESSING COMPLETE ===")
-    print("Next step: Run src/models/train_model.py")
+    print("Next step: Run docker compose exec api python -m src.data.create_database_mysql")
 
 # Run this if script is called directly
 if __name__ == "__main__":

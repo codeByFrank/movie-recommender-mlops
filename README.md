@@ -82,33 +82,40 @@ recsys-mlops/
 ## How to Use the System
 
 0) Pre-requisites:
-  -Docker Desktop (includes Docker Compose)
+  -Docker Desktop (includes Docker Compose) installed and open
 
     Windows: enable WSL2 backend during install
 
   -Git (to clone the repo)
-
-if fresh repo + empty DB:
-# run once, inside the api container (idempotent)
-docker compose exec api python -m src.models.create_database_mysql   # or your actual module path
-
-
-1) Clone the repo
-
-2) Create a .env with this code:
-    # API basic auth
+  -Create a env. file (example):
     API_BASIC_USER=admin
     API_BASIC_PASS=secret
 
-    # MLflow (experiment tracking & model registry)
     MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
+    MODEL_NAME=movie_recommender_svd
     MODEL_URI=models:/movie_recommender_svd@production
+    MLFLOW_DISABLE_ENV_CREATION=true
 
-    # MySQL (database)
     DB_HOST=mysql-ml
     DB_USER=app
     DB_PASS=mysql
     DB_NAME=movielens
+
+    DATABASE_HOST=mysql-ml
+    DATABASE_USER=app
+    DATABASE_PASSWORD=mysql
+    DATABASE_NAME=movielens
+
+1) Open terminal at repo root
+
+    VS Code: Terminal → New Terminal (it opens at the workspace folder).
+
+    Or cd into the project folder manually.
+
+2) if fresh repo + empty DB:
+# run once, inside the api container (idempotent)
+docker compose exec api python -m src.models.create_database_mysql   # or your actual module path
+
 
 3) Start the stack - in terminal:
 docker compose up -d

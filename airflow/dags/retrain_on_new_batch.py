@@ -1,139 +1,215 @@
 # airflow/dags/retrain_on_new_batch.py
-#
-# DAG:
-# 1) pick one CSV from data/landing (if none, skip)
-# 2) ingest it to MySQL via your script
-# 3) train the model (logs to MLflow local folder)
-# 4) move the CSV to data/processed
-
 from __future__ import annotations
-
-import glob
-import os
-import shutil
-import subprocess
+import os, glob, shutil, json, subprocess
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.decorators import task
+from airflow.operators.python import PythonOperator
 from airflow.exceptions import AirflowSkipException
 
-from sqlalchemy import create_engine, text
-import pandas as pd
+import pandas as pd  # <-- needed for generator
 
+# ---- CONFIG ----
+PROJECT_ROOT  = "/opt/airflow/repo"
+LANDING_DIR   = os.environ.get("LANDING_DIR",  f"{PROJECT_ROOT}/data/landing")
+PROCESSED_DIR = os.environ.get("PROCESSED_DIR", f"{PROJECT_ROOT}/data/processed")
+FAILED_DIR    = os.environ.get("FAILED_DIR",   f"{PROJECT_ROOT}/data/failed")
 
-# Paths inside the Airflow containers
-REPO_ROOT = "/opt/airflow/repo"
-LANDING_DIR = os.environ.get("LANDING_DIR", f"{REPO_ROOT}/data/landing")
-PROCESSED_DIR = f"{REPO_ROOT}/data/processed"
+PYTHON_BIN = "python"  # <-- define this
 
-# Keep MLflow artifacts inside the bind-mounted repo
-MLFLOW_URI_DEFAULT = f"file:{REPO_ROOT}/mlruns"
+MLFLOW_TRACKING_URI = "http://mlflow-ui:5000"
+MODEL_NAME = "movie_recommender_svd"
+PRIMARY_METRIC = "rmse"
+BETTER_IS_LOWER = True
 
 default_args = {
-    "owner": "you",
-    "retries": 0,
+    "owner": "mlops",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=2),
 }
 
 with DAG(
     dag_id="retrain_on_new_batch",
     start_date=datetime(2025, 10, 1),
-    schedule="*/30 * * * *",
+    schedule="@daily",
     catchup=False,
     default_args=default_args,
-    dagrun_timeout=timedelta(minutes=30),
-    description="Ingest one new ratings batch, retrain SVD, archive batch",
+    tags=["mlops","training"],
 ) as dag:
-    
-    def _conn_url():
-        host = os.getenv("DATABASE_HOST", "mysql-ml")
-        port = os.getenv("DATABASE_PORT", "3306")
-        user = os.getenv("DATABASE_USER", "app")
-        pwd  = os.getenv("DATABASE_PASSWORD", "mysql")
-        db   = os.getenv("DATABASE_NAME", "movielens")
-        return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}"
 
-
-    @task
-    def maybe_generate_batch_if_empty() -> None:
-        """If landing/ is empty, create a small synthetic batch from MySQL."""
+    # --- Generate a tiny batch if landing is empty (nice for demos) ---
+    def maybe_generate_batch_if_empty(**ctx):
         os.makedirs(LANDING_DIR, exist_ok=True)
-        existing = sorted(glob.glob(os.path.join(LANDING_DIR, "ratings_batch_*.csv")))
-        if existing:
-            print(f"Landing not empty ({len(existing)} files) — no generation.")
+        files = glob.glob(os.path.join(LANDING_DIR, "*.csv"))
+        if files:
+            print(f"Landing has {len(files)} file(s) — no generation.")
             return
-
-        print("Landing empty → generating a small batch...")
-        eng = create_engine(_conn_url(), pool_pre_ping=True, future=True)
-        # sample ~200 rows (RAND() is fine for small local data)
-        q = text("""
-            SELECT userId, movieId, rating, `timestamp`
-            FROM ratings
-            ORDER BY RAND() LIMIT 200
-        """)
-        with eng.connect() as c:
-            df = pd.read_sql_query(q, c)
-
-        if df.empty:
-            print("No rows in ratings yet — writing a tiny dummy 2-row batch.")
-            df = pd.DataFrame(
-                [{"userId": 9999, "movieId": 1, "rating": 4.0, "timestamp": 1699999999},
-                {"userId": 9999, "movieId": 2, "rating": 3.5, "timestamp": 1699999999}]
-            )
-
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        out = os.path.join(LANDING_DIR, f"ratings_batch_{ts}.csv")
+        df = pd.DataFrame([
+            {"userId": 1, "movieId": 1, "rating": 4.0, "timestamp": 1700000000},
+            {"userId": 1, "movieId": 2, "rating": 3.5, "timestamp": 1700000001},
+        ])
+        out = os.path.join(LANDING_DIR, "ratings_batch_synth.csv")
         df.to_csv(out, index=False)
-        print(f"Wrote {len(df)} rows → {out}")
+        print(f"Generated {out}")
 
-    @task
-    def pick_batch() -> str:
-        os.makedirs(LANDING_DIR, exist_ok=True)
-        pattern = os.path.join(LANDING_DIR, "ratings_batch_*.csv")   # <-- the *
-        files = sorted(glob.glob(pattern))
+    gen_if_empty = PythonOperator(
+        task_id="maybe_generate_batch_if_empty",
+        python_callable=maybe_generate_batch_if_empty,
+    )
+
+    # --- Pick batch ---
+    def pick_one_batch(**ctx):
+        files = sorted(glob.glob(os.path.join(LANDING_DIR, "*.csv")))
         if not files:
-            from airflow.exceptions import AirflowSkipException
-            raise AirflowSkipException(f"No batch files found matching {pattern}")
-        return files[0]  # oldest first
+            raise AirflowSkipException("No new CSV in landing.")
+        batch = files[0]  # deterministic: oldest first
+        print("Picked:", batch)
+        ctx["ti"].xcom_push(key="batch_path", value=batch)
 
-    @task
-    def ingest(csv_path: str):
-        cmd = [
-            "python", "-u", "-m", "src.dataops.ingest_to_mysql",
-            "--csv_path", csv_path,                           # <-- pass-through
-        ]
-        print("Running:", " ".join(cmd))
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+    pick_batch = PythonOperator(
+        task_id="pick_batch",
+        python_callable=pick_one_batch,
+    )
 
+    # --- Ingest batch into MySQL ---
+    def ingest_mysql(**ctx):
+        import os, sys, shlex, subprocess, traceback
 
-    @task
-    def train() -> None:
-        # Ensure the mlruns directory exists (for file: tracking)
-        os.makedirs(os.path.join(REPO_ROOT, "mlruns"), exist_ok=True)
+        print("=== INGEST START ===")
+        batch = ctx["ti"].xcom_pull(key="batch_path")
+        print("INGEST >> batch_path =", batch)
+        print("INGEST >> PROJECT_ROOT =", PROJECT_ROOT)
+        print("INGEST >> LANDING_DIR  =", LANDING_DIR)
+        print("INGEST >> PYTHON (sys.executable) =", sys.executable)
 
-        cmd = ["python", "-u", "-m", "src.models.train_model_mysql"]
+        if not batch:
+            raise RuntimeError("No XCom 'batch_path' value")
+        print("INGEST >> exists(batch)?", os.path.exists(batch))
+
+        # prefer the same interpreter Airflow uses
+        python_bin = sys.executable
+        cmd = [python_bin, "-m", "src.data.create_database_mysql", "--batch-csv", batch]
+        print("INGEST >> Running:", " ".join(shlex.quote(c) for c in cmd))
+
+        try:
+            proc = subprocess.run(cmd, cwd=PROJECT_ROOT, text=True, capture_output=True)
+            print("---- STDOUT ----\n" + (proc.stdout or ""))
+            print("---- STDERR ----\n" + (proc.stderr or ""))
+            print("INGEST >> returncode =", proc.returncode)
+            if proc.returncode != 0:
+                raise RuntimeError(f"ingest exited with code {proc.returncode}")
+            print("=== INGEST OK ===")
+        except Exception as e:
+            print("=== INGEST FAILED ===")
+            traceback.print_exc()
+            raise
+    ingest = PythonOperator(
+    task_id="ingest_mysql",
+    python_callable=ingest_mysql,
+)
+
+    # --- Train model ---
+    def train_with_mlflow(**ctx):
+        import sys
         env = os.environ.copy()
-        env.setdefault("MLFLOW_TRACKING_URI", MLFLOW_URI_DEFAULT)
-        env.setdefault("GIT_PYTHON_REFRESH", "quiet")
+        env["MLFLOW_TRACKING_URI"] = MLFLOW_TRACKING_URI
 
-        print("Env MLFLOW_TRACKING_URI =", env.get("MLFLOW_TRACKING_URI"))
+        cmd = [sys.executable, "-m", "src.models.train_model_mysql"]
+        print("Using MLFLOW_TRACKING_URI =", env["MLFLOW_TRACKING_URI"])
         print("Running:", " ".join(cmd))
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
+        out = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env, check=False,
+                            capture_output=True, text=True)
 
-    @task
-    def archive(csv_path: str) -> None:
+        # show child logs (useful on failure)
+        if out.stdout:
+            print("---- TRAIN STDOUT ----\n" + out.stdout)
+        if out.stderr:
+            print("---- TRAIN STDERR ----\n" + out.stderr)
+
+        if out.returncode != 0:
+            raise RuntimeError(f"train exited with code {out.returncode}")
+
+        # Parse last JSON line
+        last_json = None
+        for line in out.stdout.strip().splitlines()[::-1]:
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                last_json = json.loads(line); break
+        if not last_json:
+            raise RuntimeError("Training script didn't emit final JSON metrics")
+
+        metric = last_json.get(PRIMARY_METRIC)
+        if metric is None:
+            from airflow.exceptions import AirflowSkipException
+            raise AirflowSkipException("Training produced no PRIMARY_METRIC (rmse).")
+
+        ctx["ti"].xcom_push(key="candidate_run_id", value=last_json.get("run_id"))
+        ctx["ti"].xcom_push(key="candidate_metric", value=float(metric))
+        
+    train = PythonOperator(
+        task_id="train_candidate",
+        python_callable=train_with_mlflow,
+    )
+
+    # --- Compare & promote ---
+    def compare_and_promote(**ctx):
+        import mlflow
+        from mlflow.tracking import MlflowClient
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        client = MlflowClient()
+
+        candidate_run_id = ctx["ti"].xcom_pull(key="candidate_run_id")
+        candidate_metric = float(ctx["ti"].xcom_pull(key="candidate_metric"))
+
+        versions = client.get_registered_model(MODEL_NAME).latest_versions
+        prod = [v for v in versions if (v.current_stage == "Production" or
+                                        "production" in (v.aliases or []))]
+        current_prod_metric = None
+        current_prod_version = None
+        if prod:
+            pv = sorted(prod, key=lambda v: int(v.version), reverse=True)[0]
+            current_prod_version = pv.version
+            run = client.get_run(pv.run_id)
+            m = run.data.metrics.get(PRIMARY_METRIC)
+            if m is not None:
+                current_prod_metric = float(m)
+
+        def better(new, old):
+            return True if old is None else (new < old if BETTER_IS_LOWER else new > old)
+
+        cand_versions = client.search_model_versions(f"name='{MODEL_NAME}'")
+        cand_v = [v for v in cand_versions if v.run_id == candidate_run_id]
+        if not cand_v:
+            raise RuntimeError("Candidate run not found as a registered model version.")
+        cand_v = sorted(cand_v, key=lambda v: int(v.version), reverse=True)[0]
+
+        if better(candidate_metric, current_prod_metric):
+            client.set_registered_model_alias(MODEL_NAME, "production", cand_v.version)
+            print(f"Promoted v{cand_v.version} ({candidate_metric}) to @production")
+        else:
+            print(f"Kept production v{current_prod_version} (metric={current_prod_metric})")
+
+    select_and_promote = PythonOperator(
+        task_id="compare_and_promote",
+        python_callable=compare_and_promote,
+    )
+
+    # --- Archive ---
+    def archive(**ctx):
+        batch = ctx["ti"].xcom_pull(key="batch_path")
+        if not batch:
+            print("No batch_path (upstream skipped); nothing to archive.")
+            return
         os.makedirs(PROCESSED_DIR, exist_ok=True)
-        dest = os.path.join(PROCESSED_DIR, os.path.basename(csv_path))
-        shutil.move(csv_path, dest)
-        print(f"Moved {csv_path} -> {dest}")
+        dst = os.path.join(PROCESSED_DIR, os.path.basename(batch))
+        shutil.move(batch, dst)
+        print(f"Moved {batch} -> {dst}")
 
-    gen = maybe_generate_batch_if_empty()   # <- NEW: create a batch if landing/ is empty
-    batch = pick_batch()
+    archive_batch = PythonOperator(
+        task_id="archive_batch",
+        python_callable=archive,
+        trigger_rule="none_failed_min_one_success",
+    )
 
-    ingest_task = ingest(batch)
-    train_task = train()
-    archive_task = archive(batch)
-
-    # dependencies
-    gen >> batch                # ensure generator runs before we try to pick a file
-    ingest_task >> train_task >> archive_task
+    # --- Dependencies ---
+    gen_if_empty >> pick_batch >> ingest >> train >> select_and_promote >> archive_batch

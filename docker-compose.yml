@@ -170,6 +170,19 @@ services:
       - airflow_home:/opt/airflow
     command: ["bash","-c","airflow scheduler"]
 
+  streamlit:
+    build: ./streamlit
+    container_name: streamlit-app
+    environment:
+      API_URL: "http://api:8000"
+      API_BASIC_USER: ${API_BASIC_USER:-admin}
+      API_BASIC_PASS: ${API_BASIC_PASS:-secret}
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+      
 volumes:
   mysql_data:
   airflow_home:

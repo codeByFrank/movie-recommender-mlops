@@ -110,42 +110,74 @@ with DAG(
 
     # --- Train model ---
     def train_with_mlflow(**ctx):
-        import sys
-        env = os.environ.copy()
-        env["MLFLOW_TRACKING_URI"] = MLFLOW_TRACKING_URI
-
-        cmd = [sys.executable, "-m", "src.models.train_model_mysql"]
-        print("Using MLFLOW_TRACKING_URI =", env["MLFLOW_TRACKING_URI"])
-        print("Running:", " ".join(cmd))
-        out = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env, check=False,
-                            capture_output=True, text=True)
-
-        # show child logs (useful on failure)
-        if out.stdout:
-            print("---- TRAIN STDOUT ----\n" + out.stdout)
-        if out.stderr:
-            print("---- TRAIN STDERR ----\n" + out.stderr)
-
-        if out.returncode != 0:
-            raise RuntimeError(f"train exited with code {out.returncode}")
-
-        # Parse last JSON line
-        last_json = None
-        for line in out.stdout.strip().splitlines()[::-1]:
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                last_json = json.loads(line); break
-        if not last_json:
-            raise RuntimeError("Training script didn't emit final JSON metrics")
-
-        metric = last_json.get(PRIMARY_METRIC)
-        if metric is None:
-            from airflow.exceptions import AirflowSkipException
-            raise AirflowSkipException("Training produced no PRIMARY_METRIC (rmse).")
-
-        ctx["ti"].xcom_push(key="candidate_run_id", value=last_json.get("run_id"))
-        ctx["ti"].xcom_push(key="candidate_metric", value=float(metric))
+        """
+        Train model via FastAPI endpoint instead of direct subprocess call.
+        """
+        import requests
+        from requests.auth import HTTPBasicAuth
         
+        api_user = os.getenv("API_BASIC_USER", "admin")
+        api_pass = os.getenv("API_BASIC_PASS", "secret")
+        
+        print("=== TRAINING VIA FASTAPI ===")
+        print(f"Calling http://api:8000/train with user={api_user}")
+        
+        try:
+            response = requests.post(
+                "http://api:8000/train",
+                auth=HTTPBasicAuth(api_user, api_pass),
+                timeout=3600  # 1 hour timeout
+            )
+            
+            print(f"Response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                raise RuntimeError(f"Training API returned {response.status_code}: {response.text}")
+            
+            result = response.json()
+            print(f"Training status: {result.get('status')}")
+            
+            # Print stdout/stderr from API response
+            if result.get("stdout"):
+                print("---- TRAIN STDOUT (from API) ----")
+                print(result["stdout"])
+            if result.get("stderr"):
+                print("---- TRAIN STDERR (from API) ----")
+                print(result["stderr"])
+            
+            if result.get("status") != "success":
+                error_msg = result.get("stderr") or result.get("message") or "Unknown error"
+                raise RuntimeError(f"Training failed: {error_msg}")
+            
+            # Parse metrics from stdout
+            stdout = result.get("stdout", "")
+            last_json = None
+            for line in stdout.strip().splitlines()[::-1]:
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        last_json = json.loads(line)
+                        break
+                    except:
+                        continue
+            
+            if not last_json:
+                raise RuntimeError("Training script didn't emit final JSON metrics")
+            
+            metric = last_json.get(PRIMARY_METRIC)
+            if metric is None:
+                from airflow.exceptions import AirflowSkipException
+                raise AirflowSkipException("Training produced no PRIMARY_METRIC (rmse).")
+            
+            ctx["ti"].xcom_push(key="candidate_run_id", value=last_json.get("run_id"))
+            ctx["ti"].xcom_push(key="candidate_metric", value=float(metric))
+            
+            print(f"✅ Training completed via API: run_id={last_json.get('run_id')}, {PRIMARY_METRIC}={metric}")
+            
+        except requests.Timeout:
+            raise RuntimeError("Training API timeout after 1 hour")
+        except requests.RequestException as e:
+            raise RuntimeError(f"Failed to call training API: {str(e)}")
     train = PythonOperator(
         task_id="train_candidate",
         python_callable=train_with_mlflow,

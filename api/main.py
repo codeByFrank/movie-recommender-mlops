@@ -133,25 +133,47 @@ def trigger_training():
     """
     try:
         import subprocess
+        
+        print("🚀 Starting training...")  # ← NEU
+        
+        # Führe das MySQL-Training-Script aus
         result = subprocess.run(
-            ["python", "src/models/train_model.py"],
+            ["python", "-m", "src.models.train_model_mysql"],
             capture_output=True,
             text=True,
-            timeout=3600
+            timeout=3600,
+            cwd="/opt/airflow/repo",
+            env={
+                **os.environ,
+                "MLFLOW_TRACKING_URI": "http://mlflow-ui:5000"
+            }
         )
+        
+        print(f"Training returncode: {result.returncode}")  # ← NEU
+        print(f"STDOUT length: {len(result.stdout) if result.stdout else 0}")  # ← NEU
+        print(f"STDERR length: {len(result.stderr) if result.stderr else 0}")  # ← NEU
+        
         if result.returncode == 0:
             return {
                 "status": "success",
                 "message": "Model retrained successfully",
-                "output": result.stdout[-500:]
+                "stdout": result.stdout[-1000:] if result.stdout else "",
+                "stderr": result.stderr[-500:] if result.stderr else ""
             }
         else:
+            print(f"❌ Training failed with code {result.returncode}")  # ← NEU
+            print(f"STDERR: {result.stderr}")  # ← NEU
             return {
                 "status": "error",
                 "message": "Training failed",
-                "error": result.stderr[-500:]
+                "returncode": result.returncode,
+                "stdout": result.stdout[-1000:] if result.stdout else "",
+                "stderr": result.stderr[-1000:] if result.stderr else ""
             }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Training timeout after 1 hour")
     except Exception as e:
+        print(f"❌ Exception: {e}")  # ← NEU
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
 @app.get("/model/status", dependencies=[Depends(require_basic)])

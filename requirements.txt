@@ -26,9 +26,9 @@ dvc>=3.0.0
 prometheus-client>=0.17.0
 evidently>=0.4.0
 
-# MySQL
-pymysql        
+# MySQL      
 psycopg2-binary
 mysql-connector-python
 python-dotenv
 SQLAlchemy>=2.0.0
+PyMySQL==1.1.2

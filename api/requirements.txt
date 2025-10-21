@@ -15,3 +15,4 @@ wheel
 
 mysql-connector-python
 python-dotenv
+PyMySQL==1.1.2

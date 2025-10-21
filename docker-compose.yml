@@ -1,6 +1,8 @@
 services:
   api:
     build: ./api
+    networks:                          
+      - default
     environment:
       MLFLOW_DISABLE_ENV_CREATION: "true"
       API_BASIC_USER: ${API_BASIC_USER:-admin}
@@ -12,6 +14,7 @@ services:
 
       # MLflow champion model
       MLFLOW_TRACKING_URI: "http://mlflow-ui:5000"
+      #MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
       MODEL_NAME: movie_recommender_svd
 
       # DB config used by get_movie_info()/popular()
@@ -29,8 +32,9 @@ services:
     depends_on:
       mysql-ml:
         condition: service_healthy
-      airflow-webserver:
-        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully 
+
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     
   mysql-ml:
@@ -42,7 +46,7 @@ services:
       MYSQL_PASSWORD: mysql
       MYSQL_ROOT_PASSWORD: root
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d:ro
@@ -79,14 +83,8 @@ services:
       - ./:/opt/airflow/repo
       - airflow_home:/opt/airflow
     command: >
-      bash -lc "airflow db init &&
-                airflow users create
-                  --role Admin
-                  --username recommender
-                  --password BestTeam
-                  --firstname Recomender
-                  --lastname Admin
-                  --email recomender@example.com"
+      bash -lc "airflow db migrate &&
+                airflow users create --role Admin --username recommender --password BestTeam --firstname Recommender --lastname Admin --email recommender@example.com"
 
   airflow-webserver:
     build:
@@ -94,10 +92,10 @@ services:
       dockerfile: airflow/Dockerfile
     image: airflow-custom:latest
     depends_on:
-      mysql-ml:
-        condition: service_healthy
-      airflow-init:
-        condition: service_started
+        mysql-ml:
+          condition: service_healthy
+        airflow-init:
+          condition: service_completed_successfully
     environment:
       AIRFLOW_HOME: /opt/airflow
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
@@ -122,20 +120,25 @@ services:
     command: ["bash","-c","airflow webserver"]
 
   mlflow-ui:
-      image: airflow-custom:latest         # same image already has mlflow installed
-      depends_on:
-        - airflow-webserver
-      environment:
-        MLFLOW_TRACKING_URI: "file:/opt/airflow/mlruns"
-      volumes:
-        - airflow_home:/opt/airflow        # share MLflow runs directory
-      ports:
-        - "5000:5000"
-      command: 
-        [
-          "bash","-lc",
-          "mlflow ui --backend-store-uri file:/opt/airflow/mlruns --host 0.0.0.0 --port 5000"
-        ]
+    build: ./api
+    container_name: mlflow-ui
+    user: "50000:0"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: "file:/opt/airflow/mlruns"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: "file:/opt/airflow/mlruns"
+    volumes:
+      - airflow_home:/opt/airflow
+    ports:
+      - "5001:5000"  # ← Ändere auf 5001
+    working_dir: /opt/airflow
+    command: >
+      bash -c "
+      mkdir -p /opt/airflow/mlruns &&
+      gunicorn -b 0.0.0.0:5000 -w 4 mlflow.server:app
+      "
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
 
   airflow-scheduler:
     build:
@@ -146,7 +149,7 @@ services:
       mysql-ml:
         condition: service_healthy
       airflow-init:
-        condition: service_started
+        condition: service_completed_successfully
     environment:
       AIRFLOW_HOME: /opt/airflow
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
@@ -161,13 +164,29 @@ services:
       LANDING_DIR: /opt/airflow/repo/data/landing
       GIT_PYTHON_REFRESH: "quiet"
       MLFLOW_TRACKING_URI: http://mlflow-ui:5000
-
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./:/opt/airflow/repo
       - airflow_home:/opt/airflow
     command: ["bash","-c","airflow scheduler"]
 
+  streamlit:
+    build: ./streamlit
+    container_name: streamlit-app
+    environment:
+      API_URL: "http://api:8000"
+      API_BASIC_USER: ${API_BASIC_USER:-admin}
+      API_BASIC_PASS: ${API_BASIC_PASS:-secret}
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+      
 volumes:
   mysql_data:
   airflow_home:
+
+networks:          
+  default:
+    name: mlops-network

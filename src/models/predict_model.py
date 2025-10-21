@@ -46,7 +46,7 @@ class MovieRecommender:
     # ------------- DB helpers -------------
     def _connect(self):
         return mysql.connector.connect(
-            host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+            host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
         )
 
     def _all_movie_ids(self):
@@ -174,7 +174,7 @@ class MovieRecommender:
         def _popular_from_db(limit: int):
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
                 )
                 cur = conn.cursor()
                 cur.execute(
@@ -212,7 +212,7 @@ class MovieRecommender:
             # 0) Cold-start guard: does this user have any ratings?
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
                 )
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM ratings WHERE userId=%s", (user_id,))
@@ -230,7 +230,7 @@ class MovieRecommender:
             # 1) Candidate set: movies this user hasn't rated yet
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
                 )
                 cur = conn.cursor()
                 cur.execute(
@@ -274,7 +274,7 @@ class MovieRecommender:
             # 4) Hydrate titles/genres in one go
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
                 )
                 cur = conn.cursor()
                 placeholders = ",".join(["%s"] * len(top))
@@ -343,7 +343,7 @@ class MovieRecommender:
         # hydrate from DB
         try:
             conn = mysql.connector.connect(
-                host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name
+                host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name, ssl_disabled=False
             )
             cur = conn.cursor()
             placeholders = ",".join(["%s"] * len(top_movie_ids))

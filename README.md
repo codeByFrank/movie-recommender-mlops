@@ -81,64 +81,63 @@ recsys-mlops/
 
 ## How to Use the System
 
-0) Pre-requisites:
-  -Docker Desktop (includes Docker Compose) installed and open
+0. Pre-requisites:
+   -Docker Desktop (includes Docker Compose) installed and open
 
-    Windows: enable WSL2 backend during install
+   Windows: enable WSL2 backend during install
 
-  -Git (to clone the repo)
-  -Create a env. file (example):
-    API_BASIC_USER=admin
-    API_BASIC_PASS=secret
+   -Git (to clone the repo)
+   -Create a env. file (example):
+   API_BASIC_USER=admin
+   API_BASIC_PASS=secret
 
-    MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
-    MODEL_NAME=movie_recommender_svd
-    MODEL_URI=models:/movie_recommender_svd@production
-    MLFLOW_DISABLE_ENV_CREATION=true
+   MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
+   MODEL_NAME=movie_recommender_svd
+   MODEL_URI=models:/movie_recommender_svd@production
+   MLFLOW_DISABLE_ENV_CREATION=true
 
-    DB_HOST=mysql-ml
-    DB_USER=app
-    DB_PASS=mysql
-    DB_NAME=movielens
+   DB_HOST=mysql-ml
+   DB_USER=app
+   DB_PASS=mysql
+   DB_NAME=movielens
 
-    DATABASE_HOST=mysql-ml
-    DATABASE_USER=app
-    DATABASE_PASSWORD=mysql
-    DATABASE_NAME=movielens
+   DATABASE_HOST=mysql-ml
+   DATABASE_USER=app
+   DATABASE_PASSWORD=mysql
+   DATABASE_NAME=movielens
 
-1) Open terminal at repo root
+1. Open terminal at repo root
 
-    VS Code: Terminal → New Terminal (it opens at the workspace folder).
+   VS Code: Terminal → New Terminal (it opens at the workspace folder).
 
-    Or cd into the project folder manually.
+   Or cd into the project folder manually.
 
-2) if fresh repo + empty DB:
+2. if fresh repo + empty DB:
+
 # run once, inside the api container (idempotent)
-docker compose exec api python -m src.models.create_database_mysql   # or your actual module path
 
+docker compose exec api python -m src.data.create_database_mysql # or your actual module path
 
-3) Start the stack - in terminal:
-docker compose up -d
-docker compose ps
+3. Start the stack - in terminal:
+   docker compose up -d
+   docker compose ps
 
-4) Verify UIs are reachable
+4. Verify UIs are reachable
 
-  API docs (FastAPI): http://localhost:8000/docs
-      User: admin
-      Password: secret
+API docs (FastAPI): http://localhost:8000/docs
+User: admin
+Password: secret
 
-  MLflow UI: http://localhost:5000
+MLflow UI: http://localhost:5000
 
-  Airflow UI: http://localhost:8080
+Airflow UI: http://localhost:8080
 
-5) First training run (creates/updates the model in the registry), run:
+5. First training run (creates/updates the model in the registry), run:
 
-  docker compose exec api python -m src.models.train_model_mysql
+docker compose exec api python -m src.models.train_model_mysql
 
-6) Confirm the API sees the promoted model
-  curl http://localhost:8000/health
-
-
+6. Confirm the API sees the promoted model
+   curl http://localhost:8000/health
 
 ## Technical Details
 
@@ -202,15 +201,12 @@ docker compose ps
 - simulate new data arrival by either splitting the CSV file into multiple parts or applying random sampling on the training set.
 
 -[x] implement dockerization of the application components.
-    [x] create a Docker Compose file to orchestrate the Docker images.
-    [x] create a custom Docker file for the API component.
+[x] create a Docker Compose file to orchestrate the Docker images.
+[x] create a custom Docker file for the API component.
 
 ## Phase 4
--[x] modify the Airflow DAG to request the training endpoint of the API 
--[x]instead of running the Python script directly.
--[x]implement the Streamlit application as the frontend interface for the prediction pipeline.
--[x]ensure the API uses the best model for predictions.
 
+-[x] modify the Airflow DAG to request the training endpoint of the API -[x]instead of running the Python script directly. -[x]implement the Streamlit application as the frontend interface for the prediction pipeline. -[x]ensure the API uses the best model for predictions.
 
 ## Dependencies
 

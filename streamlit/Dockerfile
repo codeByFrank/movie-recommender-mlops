@@ -5,10 +5,12 @@ WORKDIR /app
 # Install dependencies
 RUN pip install --no-cache-dir \
   streamlit==1.29.0 \
-  requests==2.31.0
+  requests==2.31.0 \
+  Pillow==10.1.0
 
-# Copy app
+# Copy app and images
 COPY app.py /app/
+COPY images/ /app/images/
 
 # Expose port
 EXPOSE 8501

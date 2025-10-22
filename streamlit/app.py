@@ -26,7 +26,7 @@ st.markdown("""
     /* Reduce top padding */
     .block-container {
         padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
+        padding-bottom: 5rem !important;  /* Space for fixed buttons */
     }
     
     .big-title {
@@ -72,8 +72,8 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     .slide-content {
-        padding: 1rem;
-        min-height: 400px;
+       # padding: 1rem;
+       # min-height: 400px;
     }
     .project-info {
         background: #f0f2f6;
@@ -82,10 +82,31 @@ st.markdown("""
         margin: 1rem 0;
         font-size: 0.9rem;
     }
+    
+    /* Fixed navigation bar at bottom */
+    .fixed-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: white;
+        padding: 1rem;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        z-index: 999;
+        border-top: 2px solid #f0f2f6;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==================== HELPER FUNCTIONS ====================
+def load_image(image_path):
+    """Load image from file"""
+    try:
+        from PIL import Image
+        return Image.open(image_path)
+    except:
+        return None
+
 def call_api(endpoint, method="GET", json_data=None):
     """Call FastAPI endpoint"""
     try:
@@ -181,6 +202,13 @@ def slide_3_architecture_training():
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">🏗️ Architecture: Training Pipeline</p>', unsafe_allow_html=True)
     
+    # Show architecture diagram
+    img = load_image("images/architecture_training.png")
+    if img:
+        st.image(img, caption="Training Pipeline Architecture", use_column_width=True)
+    else:
+        st.warning("📊 Architecture diagram not found - showing text description")
+    
     st.info("📌 **Key Innovation**: Airflow calls FastAPI for training (not direct execution)")
     
     st.markdown("### 🔄 Automated Training Flow")
@@ -210,7 +238,7 @@ def slide_3_architecture_training():
         st.write("- Tagged '@production'")
         st.write("- API auto-loads new model")
     
-    st.markdown("---")
+    st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown("### 🔑 Key Components")
     col1, col2, col3 = st.columns(3)
@@ -237,6 +265,13 @@ def slide_4_architecture_inference():
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">🚀 Architecture: Inference Pipeline</p>', unsafe_allow_html=True)
     
+    # Show architecture diagram
+    img = load_image("images/architecture_inference.png")
+    if img:
+        st.image(img, caption="Inference Pipeline Architecture", use_column_width=True)
+    else:
+        st.warning("📊 Architecture diagram not found - showing text description")
+    
     st.markdown("### 🎯 Real-time Prediction Flow")
     
     col1, col2, col3 = st.columns(3)
@@ -261,7 +296,7 @@ def slide_4_architecture_inference():
         st.write("- Movie metadata")
         st.write("- Real-time (<1s)")
     
-    st.markdown("---")
+    st.markdown("---")  # ← ENTFERNE das </div> hier!
     
     col1, col2 = st.columns(2)
     with col1:
@@ -326,33 +361,24 @@ def slide_6_data_coldstart():
         st.markdown("### 🎬 MovieLens 20M Dataset")
         st.markdown("""
         - **20 million ratings** from 138,493 users
-        - **27,278 movies** with metadata (title, genres)
-        - **Rating scale**: 0.5 to 5.0 stars (half-star increments)
-        - **Time span**: 1995 to 2015
-        - **Sample for development**: 50,000 ratings
+        - **27,278 movies** with metadata
+        - **Rating scale**: 0.5 to 5.0 stars
+        - **Sample**: 50,000 ratings for development
         """)
         
-        st.markdown("### 🔄 ETL Pipeline")
-        st.code("""
-# 1. Download from GroupLens
-python src/data/make_dataset.py
-
-# 2. Load into MySQL
-python src/data/create_database_mysql.py \\
-    --init-schema \\
-    --load-movies movies.csv \\
-    --batch-csv ratings.csv
-        """, language="bash")
-    
-    with col2:
         st.markdown('<div class="metric-box">', unsafe_allow_html=True)
         st.markdown("### 📈 Stats")
         st.metric("Total Ratings", "50K")
         st.metric("Users", "33.2K")
         st.metric("Movies", "6.7K")
-        st.metric("Avg Rating", "3.52 ⭐")
         st.metric("Sparsity", "99.98%")
         st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        # Show rating distribution plot
+        img = load_image("images/rating_distribution.png")
+        if img:
+            st.image(img, caption="Rating Distribution Analysis", use_column_width=True)
     
     st.markdown("---")
     
@@ -360,14 +386,19 @@ python src/data/create_database_mysql.py \\
     
     col1, col2 = st.columns(2)
     with col1:
+        # Show cold start analysis plot
+        img = load_image("images/cold_start_analysis.png")
+        if img:
+            st.image(img, caption="Cold Start Analysis", use_column_width=True)
+    
+    with col2:
         st.warning("""
         **Problem Identified:**
         - 32,423 users with <5 ratings (97.6%) 🥶
         - 4,475 movies with <5 ratings (66.5%) 🧊
         - Very sparse user-item matrix
         """)
-    
-    with col2:
+        
         st.success("""
         **Solution Implemented:**
         - ✅ Popularity-based fallback for new users
@@ -523,6 +554,85 @@ def slide_9_transition():
     st.markdown("---")
     st.info("👉 **Switch to 'Demo' tab in the sidebar to interact with the system!**")
     st.markdown('</div>', unsafe_allow_html=True)
+
+def slide_10_conclusion():
+    """Conclusion & Next Steps"""
+    st.markdown('<div class="slide-content">', unsafe_allow_html=True)
+    st.markdown('<p class="big-title">✅ Summary & Achievements</p>', unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 🎯 What We Built")
+        st.markdown("""
+        ✅ **End-to-End ML Pipeline**
+        - Automated data ingestion
+        - SVD-based recommendation model
+        - Production-ready FastAPI service
+        - Interactive Streamlit dashboard
+        
+        ✅ **MLOps Best Practices**
+        - Experiment tracking (MLflow)
+        - Workflow orchestration (Airflow)
+        - Model versioning & registry
+        - Automated deployment
+        
+        ✅ **Production Features**
+        - Cold start handling
+        - Real-time predictions
+        - Authentication & security
+        - Containerized deployment
+        """)
+    
+    with col2:
+        st.markdown("### 🚀 Key Achievements")
+        st.markdown("""
+        **Technical:**
+        - RMSE: 0.80 (beat baseline by 5%)
+        - Response time: <500ms
+        - Daily automated retraining
+        - Zero-downtime deployments
+        
+        **Learning Outcomes:**
+        - MLOps principles in practice
+        - Airflow pipeline design
+        - Model serving at scale
+        - Docker orchestration
+        """)
+    
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("### 🔮 Future Work")
+        st.write("- Data drift detection")
+        st.write("- A/B testing framework")
+        st.write("- Real-time monitoring")
+        st.write("- Feature store integration")
+    
+    with col2:
+        st.markdown("### 🛠️ Tech Stack")
+        st.write("- Python | Docker | MySQL")
+        st.write("- Airflow | MLflow")
+        st.write("- FastAPI | Streamlit")
+        st.write("- Scikit-learn | NumPy")
+    
+    with col3:
+        st.markdown("### 👥 Team")
+        st.write("**Frank Lee**")
+        st.write("**Nicole Doehring**")
+        st.write("**Gustavo Silva**")
+        st.write("")
+        st.write("📅 Sep - Oct 2025")
+    
+    st.markdown("---")
+    
+    st.success("🎓 **DataScientest MLOps Bootcamp** | Thank you! Questions?")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ==================== DEMO PAGES ====================
 def demo_recommendations():
@@ -725,7 +835,8 @@ def main():
                 "6️⃣ Data & Cold Start",
                 "7️⃣ Model & Metrics",
                 "8️⃣ MLOps Implementation",
-                "9️⃣ Transition to Demo"
+                "9️⃣ Transition to Demo",
+                "🎯 Conclusion"
             ]
             
             selected_slide = st.radio("Jump to:", slides, index=st.session_state.slide_number)
@@ -756,7 +867,8 @@ def main():
             slide_6_data_coldstart,
             slide_7_model,
             slide_8_mlops,
-            slide_9_transition
+            slide_9_transition,
+            slide_10_conclusion
         ]
         
         slides_functions[st.session_state.slide_number]()

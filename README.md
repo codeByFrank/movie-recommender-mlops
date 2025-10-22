@@ -55,56 +55,117 @@ Cold-start is handled via a popularity fallback.
 
 ```
 SEP25_BMLOPS_INT_MOVIE_RECO_2/
-recsys-mlops/
+├─ .github
+│  └─ workflows
+│     └─ python-app.yml
+├─ .gitignore
+├─ airflow
+│  ├─ dags
+│  │  └─ retrain_on_new_batch.py
+│  ├─ Dockerfile
+│  └─ requirements.txt
+├─ api
+│  ├─ Dockerfile
+│  ├─ main.py
+│  └─ requirements.txt
+├─ data
+│  ├─ landing
+│  ├─ processed
+│  │  └─ ratings_batch_synth.csv
+│  ├─ raw
+│  │  ├─ ml-20m
+│  │  │  ├─ genome-scores.csv
+│  │  │  ├─ genome-tags.csv
+│  │  │  ├─ links.csv
+│  │  │  ├─ movies.csv
+│  │  │  ├─ ratings.csv
+│  │  │  ├─ README.txt
+│  │  │  └─ tags.csv
+│  │  └─ ml-20m.zip
+│  └─ sample
+│     ├─ movies_sample.csv
+│     └─ ratings_sample.csv
 ├─ docker-compose.yml
-├─ .env                             # API_BASIC_USER/PASS, etc.
-├─ mysql-init/                      # SQL to create/seed movielens DB
-│  └─ 01_init.sql  ...             # schema + sample data
-├─ airflow/
-│  ├─ Dockerfile                    # airflow image with deps (mlflow, etc.)
-│  └─ dags/
-│     └─ retrain_on_new_batch.py    # DAG: generate batch → ingest → train → archive
-├─ api/
-│  ├─ Dockerfile                    # python:3.12-slim, installs fastapi, mlflow, etc.
-│  └─ main.py                       # FastAPI app (Basic Auth, endpoints, /health)
-├─ src/
-│  └─ models/
-│     ├─ train_model_mysql.py       # trains/logs/registers; auto-moves alias on better RMSE
-│     └─ predict_model.py           # loads @production model and implements business logic
-└─ models/                          # local pickles (optional fallback, also logged as artifacts)
-   ├─ svd_model.pkl
-   ├─ user_factors.pkl
-   ├─ item_factors.pkl
-   ├─ user_item_matrix.pkl
-   └─ baseline_stats.pkl
+├─ LICENSE
+├─ mlops_setup.py
+├─ models
+│  ├─ baseline_stats.pkl
+│  ├─ id_maps.pkl
+│  ├─ item_factors.pkl
+│  ├─ svd_model.pkl
+│  └─ user_factors.pkl
+├─ mysql-init
+│  └─ 01_init_mlflow.sql
+├─ notebooks
+│  ├─ .gitkeep
+│  └─ data_exploration.ipynb
+├─ probe_db.py
+├─ README.md
+├─ references
+│  └─ .gitkeep
+├─ reports
+│  ├─ .gitkeep
+│  └─ figures
+│     └─ .gitkeep
+├─ requirements.txt
+├─ src
+│  ├─ __init__.py
+│  ├─ config
+│  ├─ data
+│  │  ├─ __init__.py
+│  │  ├─ create_database.py
+│  │  ├─ create_database_mysql.py
+│  │  └─ make_dataset.py
+│  ├─ dataops
+│  │  ├─ ingest_to_mysql.py
+│  │  └─ split_csv.py
+│  ├─ features
+│  │  ├─ __init__.py
+│  │  └─ build_features.py
+│  ├─ models
+│  │  ├─ __init__.py
+│  │  ├─ predict_model.py
+│  │  └─ train_model_mysql.py
+│  └─ visualization
+│     ├─ __init__.py
+│     └─ visualize.py
+└─ streamlit
+   ├─ app.py
+   └─ Dockerfile
 ```
 
 ## How to Use the System
 
 0. Pre-requisites:
-   -Docker Desktop (includes Docker Compose) installed and open
+   - Docker Desktop installed and running
 
-   Windows: enable WSL2 backend during install
+   - WSL2 backend enabled (Windows → Docker Desktop → Settings → Resources → WSL Integration)
 
-   -Git (to clone the repo)
-   -Create a env. file (example):
-   API_BASIC_USER=admin
-   API_BASIC_PASS=secret
+   - Git installed
 
-   MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
-   MODEL_NAME=movie_recommender_svd
-   MODEL_URI=models:/movie_recommender_svd@production
-   MLFLOW_DISABLE_ENV_CREATION=true
+   - Ports free: 8080 (Airflow), 8000 (API), 5000 (MLflow), 3306 (MySQL)
 
-   DB_HOST=mysql-ml
-   DB_USER=app
-   DB_PASS=mysql
-   DB_NAME=movielens
+   - No virtual environment needed: Docker containers already install everything from requirements.txt.
+   You only need a .venv if you plan to run notebooks locally.
+   - Git (to clone the repo)
+   - Create a env. file:
+      API_BASIC_USER=admin
+      API_BASIC_PASS=secret
 
-   DATABASE_HOST=mysql-ml
-   DATABASE_USER=app
-   DATABASE_PASSWORD=mysql
-   DATABASE_NAME=movielens
+      MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
+      MODEL_NAME=movie_recommender_svd
+      MODEL_URI=models:/movie_recommender_svd@production
+      MLFLOW_DISABLE_ENV_CREATION=true
+
+      DB_HOST=mysql-ml
+      DB_USER=app
+      DB_PASS=mysql
+      DB_NAME=movielens
+
+      DATABASE_HOST=mysql-ml
+      DATABASE_USER=app
+      DATABASE_PASSWORD=mysql
+      DATABASE_NAME=movielens
 
 1. Open terminal at repo root
 
@@ -112,31 +173,54 @@ recsys-mlops/
 
    Or cd into the project folder manually.
 
-2. if fresh repo + empty DB:
+2. Build and start all containers:
+   - docker compose down -v      # clean start (wipes old volumes)
+   - docker compose up -d --build
+   - docker compose ps           # confirm all services show "Up"
 
-# run once, inside the api container (idempotent)
 
-docker compose exec api python -m src.data.create_database_mysql # or your actual module path
+3. if fresh repo + Prepare dataset and populate the database:
+   - (a) Generate dataset sample
+      docker compose exec airflow-webserver bash -lc "cd /opt/airflow/repo && python src/data/make_dataset.py"
+   - (b) Verify the generated files
+      docker compose exec airflow-webserver bash -lc "ls -lah /opt/airflow/repo/data && ls -lah /opt/airflow/repo/data/sample"
+   - (c) Create schema and load data
+      # create database and tables
+      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --init-schema"
 
-3. Start the stack - in terminal:
-   docker compose up -d
-   docker compose ps
+      # load movies
+      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --load-movies /opt/airflow/repo/data/sample/movies_sample.csv"
+
+      # load ratings
+      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --batch-csv /opt/airflow/repo/data/sample/ratings_sample.csv"
+   - (d) Verify inside MySQL
+      docker compose exec mysql-ml mysql -uapp -pmysql -e "SHOW DATABASES; USE movielens; SHOW TABLES; SELECT COUNT(*) AS movies FROM movies; SELECT COUNT(*) AS ratings FROM ratings;"
+      Expected result:
+      movies | 6730
+      ratings | 50000
 
 4. Verify UIs are reachable
 
-API docs (FastAPI): http://localhost:8000/docs
-User: admin
-Password: secret
+   - FastAPI: http://localhost:8000/docs
+      User: admin
+      Password: secret
 
-MLflow UI: http://localhost:5000
+   - MLflow UI: http://localhost:5000
 
-Airflow UI: http://localhost:8080
+   - Airflow UI: http://localhost:8080
 
-5. First training run (creates/updates the model in the registry), run:
+   NOTE: If the Airflow login doesn’t work, recreate the user:
+   docker compose exec airflow-webserver airflow users create --username recommender --password BestTeam --firstname Recommender --lastname Admin --role Admin --email recommender@example.com
 
-docker compose exec api python -m src.models.train_model_mysql
 
-6. Confirm the API sees the promoted model
+5. First training run:
+   5.1 - Open Airflow (http://localhost:8080)
+   5.2 - Open Airflow → find DAG retrain_on_new_batch.
+   5.3 - Toggle it ON and click Trigger DAG.
+
+6. Check the model in MLflow (movie_recommender_svd experiment).
+
+7. Confirm the API sees the promoted model
    curl http://localhost:8000/health
 
 ## Technical Details

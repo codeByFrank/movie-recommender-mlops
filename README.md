@@ -176,7 +176,8 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 2. Build and start all containers:
    - docker compose down -v      # clean start (wipes old volumes)
    - docker compose up -d --build
-   - docker compose ps           # confirm all services show "Up"
+   - docker compose ps 
+   Note: after running this confirm all services show "Up"
 
 
 3. if fresh repo + Prepare dataset and populate the database:
@@ -205,7 +206,7 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
       User: admin
       Password: secret
 
-   - MLflow UI: http://localhost:5000
+   - MLflow UI: http://localhost:5001
 
    - Airflow UI: http://localhost:8080
 

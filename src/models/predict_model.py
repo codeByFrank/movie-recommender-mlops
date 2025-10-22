@@ -12,6 +12,14 @@ from mlflow.models import get_model_info
 
 class MovieRecommender:
     def __init__(self):
+        # Database configuration
+        self.db_host = os.getenv("DB_HOST", "mysql-ml")
+        self.db_port = int(os.getenv("DB_PORT", "3306"))
+        self.db_user = os.getenv("DB_USER", "app")
+        self.db_pass = os.getenv("DB_PASS", "mysql")
+        self.db_name = os.getenv("DB_NAME", "movielens")
+        
+        # MLflow configuration
         mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "file:/opt/airflow/mlruns"))
         self.model_name = os.getenv("MODEL_NAME", "movie_recommender_svd")
         override_uri = os.getenv("MODEL_URI")  # e.g. models:/movie_recommender_svd@production
@@ -43,6 +51,7 @@ class MovieRecommender:
             self._mode = None
             self._load_error = str(e)
             print(f"[MovieRecommender] MLflow load failed: {e}")
+
     # ------------- DB helpers -------------
     def _connect(self):
         return mysql.connector.connect(

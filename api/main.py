@@ -82,10 +82,14 @@ def health_check():
 def get_recommendations(request: RecommendationRequest):
     """Get movie recommendations for a user - SIMPLE"""
     try:
+        print(f"🔍 Getting recommendations for user {request.user_id}")
         recommendations = recommender.get_user_recommendations(
             request.user_id, 
             request.n_recommendations
         )
+        print(f"✅ Got result type: {type(recommendations)}")
+        print(f"✅ Got result: {recommendations}")
+        
         if isinstance(recommendations, dict) and "error" in recommendations:
             raise HTTPException(status_code=404, detail=recommendations["error"])
         return {
@@ -94,6 +98,9 @@ def get_recommendations(request: RecommendationRequest):
             "count": len(recommendations)
         }
     except Exception as e:
+        print(f"❌ Exception in recommendations: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error getting recommendations: {str(e)}")
 
 @app.post("/predict", dependencies=[Depends(require_basic)])

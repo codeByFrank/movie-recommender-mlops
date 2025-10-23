@@ -202,7 +202,7 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
    - (d) Verify inside MySQL the number of rows, run:
       docker compose exec -T mysql-ml mysql -N -B -uapp -pmysql -hmysql-ml -D movielens -e "SELECT COUNT(*) FROM ratings;"
 
-      it should be 0 at the time
+      Ratings should be 0 at the time
 
 4. Verify UIs are reachable
 

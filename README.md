@@ -183,9 +183,13 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 3. if fresh repo + Prepare dataset and populate the database:
    - (a) Generate dataset sample
       docker compose exec airflow-webserver bash -lc "cd /opt/airflow/repo && python src/data/make_dataset.py"
-   - (b) Verify the generated files
-      docker compose exec airflow-webserver bash -lc "ls -lah /opt/airflow/repo/data && ls -lah /opt/airflow/repo/data/sample"
-   - (c) Create schema and load data
+
+   - (b) Verify the generated files by looking in the data/raw/ml-20m. ratings and movies.csv should be there
+
+   - (c) create csv batches of the big dataset, run:
+      python .\src\data\split_ratings_into_batches.py 
+
+   - (d) Create schema and load data
       # create database and tables
       docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --init-schema"
 
@@ -194,11 +198,11 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
 
       # load ratings
       docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --batch-csv /opt/airflow/repo/data/sample/ratings_sample.csv"
-   - (d) Verify inside MySQL
-      docker compose exec mysql-ml mysql -uapp -pmysql -e "SHOW DATABASES; USE movielens; SHOW TABLES; SELECT COUNT(*) AS movies FROM movies; SELECT COUNT(*) AS ratings FROM ratings;"
-      Expected result:
-      movies | 6730
-      ratings | 50000
+
+   - (d) Verify inside MySQL the number of rows, run:
+      docker compose exec -T mysql-ml mysql -N -B -uapp -pmysql -hmysql-ml -D movielens -e "SELECT COUNT(*) FROM ratings;"
+
+      Ratings should be 0 at the time
 
 4. Verify UIs are reachable
 

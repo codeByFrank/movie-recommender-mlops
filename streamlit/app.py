@@ -147,10 +147,11 @@ def slide_1_title():
     # Project info
     st.markdown("""
     <div class="project-info">
-        <strong>🎓 DataScientest MLOps Bootcamp</strong><br>
-        📅 <strong>Project Duration:</strong> September 4 - October 22, 2025<br>
+        <strong>🎓 DataScientest MLOps</strong><br>
+        📅 <strong>Project Duration:</strong> September 4 - October 28, 2025<br>
         🛠️ <strong>Tools:</strong> GitHub | Visual Studio Code | PyCharm | Jupyter Notebooks<br>
-        🎯 <strong>Objective:</strong> Production-ready ML system with automated training & deployment
+        🎯 <strong>Objective:</strong> Production-ready ML system with automated training & deployment<br>
+        🔍 <strong>Pipeline Coverage:</strong> Data → Train → Evaluate → Register → Deploy → Serve
     </div>
     """, unsafe_allow_html=True)
     
@@ -278,39 +279,38 @@ def slide_4_architecture_inference():
     
     with col1:
         st.markdown("**1️⃣ User Request**")
-        st.write("- Streamlit UI")
-        st.write("- User ID + preferences")
+        st.write("- Streamlit UI (post 8501)")
+        st.write("- User ID + preferences input")
         st.write("- Click 'Get Recommendations'")
     
     with col2:
         st.markdown("**2️⃣ API Processing**")
         st.write("- FastAPI receives request")
-        st.write("- Loads @production model")
-        st.write("- Matrix multiplication")
+        st.write("- Loads @production model from MLflow")
+        st.write("- Performs matrix multiplication")
         st.write("- Generates predictions")
     
     with col3:
         st.markdown("**3️⃣ Response**")
         st.write("- Top-N recommendations")
         st.write("- Predicted ratings (0.5-5.0)")
-        st.write("- Movie metadata")
-        st.write("- Real-time (<1s)")
+        #st.write("- Real-time (<1s)")
     
-    st.markdown("---")  # ← ENTFERNE das </div> hier!
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 🔥 Performance")
-        st.metric("Response Time", "< 500ms", "Fast")
+        st.metric("Avg Response Time", "< 500ms", "Fast")
         st.metric("Model Load", "On startup", "Cached")
         st.metric("Concurrent Users", "Scalable", "Stateless")
     
     with col2:
         st.markdown("### 🛡️ Production Features")
-        st.write("✅ HTTP Basic Auth")
+        st.write("✅ HTTP Basic Auth implemented")
         st.write("✅ Error handling & fallbacks")
-        st.write("✅ Cold start handling")
-        st.write("✅ Health checks")
+        st.write("✅ Cold start support for new users/movies")
+        st.write("✅ Health endpoints for container monitoring")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -319,6 +319,11 @@ def slide_5_tech_stack():
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">🛠️ Technology Stack</p>', unsafe_allow_html=True)
     
+    st.markdown("""
+    Each component is **containerized** and communicates over a shared **mlops-network**
+    for full reproducibility and portability.
+    """)
+
     col1, col2 = st.columns(2)
     
     with col1:
@@ -341,7 +346,7 @@ def slide_5_tech_stack():
         st.markdown('<span class="tech-badge">🐳 Docker</span>', unsafe_allow_html=True)
         st.markdown('<span class="tech-badge">📦 Docker Compose</span>', unsafe_allow_html=True)
         
-        st.markdown("### 🧰 **Development**")
+        st.markdown("### 🧰 **Development Tools**")
         st.markdown('<span class="tech-badge">💻 VS Code</span>', unsafe_allow_html=True)
         st.markdown('<span class="tech-badge">📓 Jupyter</span>', unsafe_allow_html=True)
         st.markdown('<span class="tech-badge">🐙 GitHub</span>', unsafe_allow_html=True)
@@ -354,7 +359,7 @@ def slide_6_data_coldstart():
     """Data Pipeline & Cold Start - NICOLE"""
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">📊 Data Pipeline & Cold Start Problem</p>', unsafe_allow_html=True)
-    
+
     col1, col2 = st.columns([3, 2])
     
     with col1:
@@ -460,6 +465,8 @@ model.fit(user_item_matrix)
         - **Baseline**: Global mean + biases
         - **Metric**: RMSE (lower is better)
         - **Threshold**: Must beat baseline by >5%
+        - **Logging:** All runs tracked in MLflow 
+        - **Promotion:** Best model tagged @production  
         """)
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -534,6 +541,7 @@ def slide_9_transition():
     
     st.markdown("---")
     
+    # Erste Reihe: 3 Hauptfeatures
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -542,14 +550,32 @@ def slide_9_transition():
         st.write("Enter a User ID and get top-N movie recommendations")
     
     with col2:
-        st.markdown("### ⭐ Rating Prediction")
+        st.markdown("### ⭐ Predictions")
         st.markdown("**Predict User-Movie Rating**")
         st.write("Predict how a user would rate a specific movie")
     
     with col3:
-        st.markdown("### 🔥 Popular Movies")
+        st.markdown("### 🔥 Popular")
         st.markdown("**Trending & Top Rated**")
         st.write("View most popular and highest-rated movies")
+    
+    st.markdown("")  # Spacing
+    
+    # Zweite Reihe: 2 zusätzliche Features
+    col4, col5, col6 = st.columns([1, 1, 1])
+    
+    with col4:
+        st.markdown("### 📽️ Movie Info")
+        st.markdown("**Get Movie Details**")
+        st.write("Look up information about any movie by ID")
+    
+    with col5:
+        st.markdown("### 📊 System Status")
+        st.markdown("**MLflow & Airflow Health**")
+        st.write("Check system health, model versions, and API status")
+    
+    with col6:
+        st.write("")  # Leere Spalte für symmetrisches Layout
     
     st.markdown("---")
     st.info("👉 **Switch to 'Demo' tab in the sidebar to interact with the system!**")
@@ -568,17 +594,13 @@ def slide_10_conclusion():
         st.markdown("### 🎯 What We Built")
         st.markdown("""
         ✅ **End-to-End ML Pipeline**
-        - Automated data ingestion
+        - Automated data ingestion → Training → Deployment
+        - Airflow-driven orchestration  
+        - MLflow model tracking 
         - SVD-based recommendation model
-        - Production-ready FastAPI service
-        - Interactive Streamlit dashboard
-        
-        ✅ **MLOps Best Practices**
-        - Experiment tracking (MLflow)
-        - Workflow orchestration (Airflow)
-        - Model versioning & registry
-        - Automated deployment
-        
+        - FastAPI serving with Streamlit UI  
+        - Docker-based reproducibility
+
         ✅ **Production Features**
         - Cold start handling
         - Real-time predictions
@@ -602,35 +624,79 @@ def slide_10_conclusion():
         - Docker orchestration
         """)
     
+        st.markdown("---")
+    st.markdown("### 🔮 Next Steps – Towards MLOps Maturity Level 2")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### 📈 Monitoring & Quality Ops")
+        st.write("- Integrate Prometheus + Grafana dashboards")
+        st.write("- Add data and model drift detection (Evidently)")
+        st.write("- Implement alerting and auto-rollback")
+
+    with col2:
+        st.markdown("#### 🧩 CI/CD & Scalability")
+        st.write("- Automate deployment with GitHub Actions")
+        st.write("- Enable A/B testing and staged rollouts")
+        st.write("- Explore Feature Store for real-time serving")
+
     st.markdown("---")
-    
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("### 🔮 Future Work")
-        st.write("- Data drift detection")
-        st.write("- A/B testing framework")
-        st.write("- Real-time monitoring")
-        st.write("- Feature store integration")
-    
-    with col2:
         st.markdown("### 🛠️ Tech Stack")
-        st.write("- Python | Docker | MySQL")
-        st.write("- Airflow | MLflow")
-        st.write("- FastAPI | Streamlit")
-        st.write("- Scikit-learn | NumPy")
-    
-    with col3:
+        st.write("Python | Docker | MySQL | Airflow | MLflow | FastAPI | Streamlit")
+
+    with col2:
         st.markdown("### 👥 Team")
-        st.write("**Frank Lee**")
-        st.write("**Nicole Doehring**")
-        st.write("**Gustavo Silva**")
-        st.write("")
-        st.write("📅 Sep - Oct 2025")
-    
+        st.write("Frank Lee  |  Nicole Doehring  |  Gustavo Silva")
+        st.write("📅 Sep – Oct 2025")
+
+    with col3:
+        st.markdown("### 🎓 Context")
+        st.write("DataScientest MLOps")
+        st.write("From Chaos to Governance – Building Resilient ML Systems")
+
     st.markdown("---")
-    
-    st.success("🎓 **DataScientest MLOps Bootcamp** | Thank you! Questions?")
-    
+    #st.success("💬 Thank you for your attention! Questions & Discussion?")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+def slide_11_outlook():
+    """Outlook – MLOps Level 2"""
+    st.markdown('<div class="slide-content">', unsafe_allow_html=True)
+    st.markdown('<p class="big-title">🔮 Outlook – From Automation to Governance</p>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    st.markdown("### 🧭 Next Milestone")
+    st.write("Evolve from **automated MLOps pipelines** to **continuous, observable, and governed systems**.")
+
+    st.markdown("### 📊 Maturity Roadmap (Text Overview)")
+    st.markdown("""
+**MLOps Maturity Roadmap**
+
+✅ **Level 1 – Automated ML Lifecycle**  
+> Airflow · MLflow · FastAPI · Docker  
+
+⬆️ **Next: Level 2 – Continuous Integration & Monitoring**  
+> Prometheus · Grafana · Evidently · GitHub Actions  
+
+🔮 **Vision: Level 3 – Governed & Resilient Systems**  
+> Model Lineage · Bias Detection · Feature Store  
+""")
+
+    st.markdown("### 🔍 Focus Areas Ahead")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("• Continuous validation & automated testing")
+        st.write("• Data / model drift governance")
+        st.write("• Real-time metrics and alert automation")
+    with col2:
+        st.write("• Feature Store integration for reusability")
+        st.write("• Bias & fairness reporting")
+        st.write("• Resilient pipelines with rollback & recovery")
+
+    st.markdown("---")
+    st.success("🧠 The goal: build resilient, auditable, and continuously learning ML systems.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -836,7 +902,8 @@ def main():
                 "7️⃣ Model & Metrics",
                 "8️⃣ MLOps Implementation",
                 "9️⃣ Transition to Demo",
-                "🎯 Conclusion"
+                "🎯 Conclusion",
+                "🚀 Outlook"
             ]
             
             selected_slide = st.radio("Jump to:", slides, index=st.session_state.slide_number)
@@ -868,7 +935,8 @@ def main():
             slide_7_model,
             slide_8_mlops,
             slide_9_transition,
-            slide_10_conclusion
+            slide_10_conclusion,
+            slide_11_outlook
         ]
         
         slides_functions[st.session_state.slide_number]()

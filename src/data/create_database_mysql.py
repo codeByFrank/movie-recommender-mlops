@@ -54,20 +54,36 @@ def main():
                     help="Identifier to tag rows from --batch-csv (e.g., ratings_batch_003)")
     args = ap.parse_args()
 
-    # 1) Ensure database exists
     ensure_database(DB_NAME)
 
-    # 2) Ensure ratings schema (and optionally movies)
     eng = engine(DB_NAME)
     with eng.begin() as con:
-        con.execute(text(DDL))
+        # 1) Create tables if missing
         if args.load_movies:
             p = Path(args.load_movies)
             if not p.exists():
                 raise FileNotFoundError(p)
             dfm = pd.read_csv(p)
-            dfm.to_sql("movies", con, if_exists="replace", index=False)
-            print(f"Loaded {len(dfm)} rows into movies.")
+            
+            
+            con.execute(text("SET FOREIGN_KEY_CHECKS=0;"))
+            con.execute(text("DROP TABLE IF EXISTS ratings;"))
+            con.execute(text("DROP TABLE IF EXISTS movies;"))
+            
+            con.execute(text("""
+                CREATE TABLE movies (
+                    movieId INT NOT NULL PRIMARY KEY,
+                    title VARCHAR(500),
+                    genres VARCHAR(200)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """))
+            
+            dfm.to_sql("movies", con, if_exists="append", index=False)
+            print(f"Loaded {len(dfm)} rows into movies.")  # <-- HIER REIN!
+        
+        # Dann ratings Tabelle
+        con.execute(text(DDL))
+        con.execute(text("SET FOREIGN_KEY_CHECKS=1;"))
 
     # If only schema init requested
     if args.init_schema and not args.batch_csv:

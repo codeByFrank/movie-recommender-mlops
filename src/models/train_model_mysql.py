@@ -32,6 +32,18 @@ def _engine():
     uri = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     return create_engine(uri, pool_pre_ping=True, future=True)
 
+# ---------- RMSE Comparing with HOLDOUT------------
+
+HOLDOUT_PCT = int(os.getenv("HOLDOUT_PCT", "10"))  # 10% of rows for validation
+
+def _holdout_pred():
+    """
+    TRUE when a row belongs to the validation split (deterministic by row).
+    Works on MySQL using CRC32.
+    """
+    # We use ':' separators to avoid accidental concatenation ambiguities.
+    return "MOD(CRC32(CONCAT(userId, ':', movieId, ':', 'timestamp')), 100) < :hpct"
+
 # ---------- Hyperparams & runtime caps (env-overridable) ----------
 N_COMPONENTS = int(os.getenv("N_COMPONENTS", "50"))
 RANDOM_STATE = int(os.getenv("RANDOM_STATE", "42"))
@@ -68,14 +80,18 @@ def _build_sparse_matrix(eng, uid2ix, mid2ix):
     while True:
         with eng.connect() as c:
             df = pd.read_sql_query(
-                text("""SELECT userId, movieId, rating
-                        FROM ratings
-                        WHERE MOD(userId, :b)=:r
-                        ORDER BY userId, movieId
-                        LIMIT :lim OFFSET :off"""),
+                text(f"""
+                    SELECT userId, movieId, rating
+                    FROM ratings
+                    WHERE MOD(userId, :b)=:r
+                    AND NOT ({_holdout_pred()})
+                    ORDER BY userId, movieId
+                    LIMIT :lim OFFSET :off
+                """),
                 c,
                 params={"b": USER_MOD_BASE, "r": USER_MOD_REM,
-                        "lim": CHUNK_SIZE, "off": offset}
+                        "lim": CHUNK_SIZE, "off": offset,
+                        "hpct": HOLDOUT_PCT},   # <-- add this
             )
         if df.empty:
             break
@@ -113,15 +129,21 @@ def _build_sparse_matrix(eng, uid2ix, mid2ix):
     )
     return X, float(global_mean), total
 
+
 def _sample_eval_pairs(eng, uid2ix, mid2ix, cap=EVAL_CAP):
     with eng.connect() as c:
         df = pd.read_sql_query(
-            text("""SELECT userId, movieId, rating
-                    FROM ratings
-                    WHERE MOD(userId, :b)=:r
-                    ORDER BY `timestamp` DESC
-                    LIMIT :cap"""),
-            c, params={"b": USER_MOD_BASE, "r": USER_MOD_REM, "cap": cap*3}
+            text(f"""
+                SELECT userId, movieId, rating
+                FROM ratings
+                WHERE MOD(userId, :b)=:r
+                AND ({_holdout_pred()})
+                ORDER BY `timestamp` DESC
+                LIMIT :cap
+            """),
+            c,
+            params={"b": USER_MOD_BASE, "r": USER_MOD_REM,
+                    "cap": cap*3, "hpct": HOLDOUT_PCT},  # <-- add hpct
         )
     df = df[df["userId"].isin(uid2ix) & df["movieId"].isin(mid2ix)]
     if df.empty:

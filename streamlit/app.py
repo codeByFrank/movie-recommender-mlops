@@ -107,23 +107,64 @@ def load_image(image_path):
     except:
         return None
 
-def call_api(endpoint, method="GET", json_data=None):
-    """Call FastAPI endpoint"""
-    try:
-        auth = HTTPBasicAuth(API_USER, API_PASS)
-        url = f"{API_URL}{endpoint}"
-        
-        if method == "GET":
-            response = requests.get(url, auth=auth, timeout=10)
-        else:
-            response = requests.post(url, auth=auth, json=json_data, timeout=30)
-        
-        if response.status_code == 200:
-            return response.json(), None
-        else:
-            return None, f"Error {response.status_code}: {response.text}"
-    except Exception as e:
-        return None, f"Connection error: {str(e)}"
+def call_api(endpoint, method="GET", json_data=None, max_retries=2, show_spinner=True):
+    """Call FastAPI endpoint with retry logic and user feedback"""
+    
+    auth = HTTPBasicAuth(API_USER, API_PASS)
+    url = f"{API_URL}{endpoint}"
+    
+    # Längere Timeouts
+    timeout = 120 if method == "POST" else 60
+    
+    for attempt in range(max_retries):
+        try:
+            spinner_msg = f"🔄 Calling API... (Attempt {attempt + 1}/{max_retries})"
+            
+            if show_spinner:
+                with st.spinner(spinner_msg):
+                    if method == "GET":
+                        response = requests.get(url, auth=auth, timeout=timeout)
+                    else:
+                        response = requests.post(url, auth=auth, json=json_data, timeout=timeout)
+            else:
+                if method == "GET":
+                    response = requests.get(url, auth=auth, timeout=timeout)
+                else:
+                    response = requests.post(url, auth=auth, json=json_data, timeout=timeout)
+            
+            if response.status_code == 200:
+                return response.json(), None
+            else:
+                error_msg = f"Error {response.status_code}: {response.text}"
+                return None, error_msg
+                
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                st.warning(f"⏰ Request timed out. Retrying in 2 seconds... ({attempt + 1}/{max_retries})")
+                time.sleep(2)
+                continue
+            else:
+                error_msg = (
+                    f"⏰ Connection timeout after {max_retries} attempts.\n\n"
+                    "💡 **Tip:** During video calls, the API might be slower. "
+                    "Try closing other applications or wait a moment."
+                )
+                return None, error_msg
+                
+        except requests.exceptions.ConnectionError:
+            error_msg = (
+                "❌ Cannot connect to API.\n\n"
+                "**Troubleshooting:**\n"
+                "1. Check if Docker is running: `docker-compose ps`\n"
+                "2. Check API logs: `docker-compose logs api`\n"
+                "3. Restart services: `docker-compose restart api`"
+            )
+            return None, error_msg
+            
+        except Exception as e:
+            return None, f"Unexpected error: {str(e)}"
+    
+    return None, "Max retries exceeded"
 
 # ==================== SLIDES ====================
 def slide_1_title():
@@ -826,6 +867,20 @@ def demo_system_status():
     """Demo: System Status"""
     st.markdown('<p class="slide-title">📊 System Status</p>', unsafe_allow_html=True)
     
+    # Auto-Check beim ersten Laden dieser Seite
+    if 'system_status_checked' not in st.session_state:
+        st.session_state.system_status_checked = True
+        with st.spinner("🔄 Checking system status..."):
+            health, error = call_api("/health", show_spinner=False)
+            st.session_state.last_health = health
+            st.session_state.last_health_error = error
+    
+    # Status Badge oben
+    if st.session_state.get('last_health'):
+        st.success("✅ All systems operational")
+    else:
+        st.warning("⚠️ System status unknown - click 'Check API Status' below")
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -835,6 +890,9 @@ def demo_system_status():
         st.write("- **Model Registry**: movie_recommender_svd")
         st.write("- **Metrics**: RMSE, MAE tracked")
         st.write("- **Artifacts**: Model files, parameters")
+        
+        if st.button("🚀 Open MLflow UI", use_container_width=True):
+            st.info("💡 Open http://localhost:5001 in your browser")
     
     with col2:
         st.markdown("### 🌊 Airflow Orchestration")
@@ -843,30 +901,128 @@ def demo_system_status():
         st.write("- **Schedule**: @daily")
         st.write("- **Tasks**: 6 (ETL → Train → Promote)")
         st.write("- **Status**: Check UI for latest runs")
+        
+        if st.button("🚀 Open Airflow UI", use_container_width=True):
+            st.info("💡 Open http://localhost:8080 in your browser\n\n"
+                   "**Credentials:** recommender / BestTeam")
     
     st.markdown("---")
     
     # API Health Check
     st.markdown("### ⚡ API Health Check")
+    
     if st.button("🔍 Check API Status", use_container_width=True):
-        with st.spinner("Checking..."):
+        import time
+        start_time = time.time()
+        
+        with st.spinner("Checking API health..."):
             health, error = call_api("/health")
         
+        response_time = time.time() - start_time
+        
+        # Cache für nächsten Reload
+        st.session_state.last_health = health
+        st.session_state.last_health_error = error
+        
         if health:
-            st.success("✅ API is healthy and running!")
+            st.success(f"✅ API is healthy and running! (Response: {response_time:.2f}s)")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Status", "Healthy ✅")
             with col2:
-                st.metric("Models Loaded", "Yes" if health.get('models_loaded') else "No")
+                models_loaded = health.get('models_loaded', False)
+                st.metric("Models Loaded", "Yes ✅" if models_loaded else "No ❌")
             with col3:
-                st.metric("Model Version", health.get('model_version', 'N/A'))
+                version = health.get('model_version', 'N/A')
+                st.metric("Model Version", version)
+            with col4:
+                # Response Time Indicator
+                if response_time < 1:
+                    st.metric("Response Time", f"{response_time:.2f}s", delta="Fast ⚡")
+                elif response_time < 5:
+                    st.metric("Response Time", f"{response_time:.2f}s", delta="Normal")
+                else:
+                    st.metric("Response Time", f"{response_time:.2f}s", delta="Slow 🐌")
             
             with st.expander("📋 Full Health Response"):
                 st.json(health)
+            
+            # Zusätzliche Infos falls Model nicht geladen
+            if not models_loaded:
+                st.warning("⚠️ **Models not loaded yet!**\n\n"
+                          "This might happen if:\n"
+                          "- API just started (models loading...)\n"
+                          "- No model in MLflow Registry\n"
+                          "- Model alias 'production' not set\n\n"
+                          "💡 **Solution:** Trigger training via API or Airflow")
         else:
-            st.error(f"❌ API health check failed: {error}")
+            st.error(f"❌ API health check failed after {response_time:.2f}s")
+            
+            # Zeige Fehler mit mehr Context
+            st.markdown(f"**Error Details:**\n```\n{error}\n```")
+            
+            # Troubleshooting Section
+            with st.expander("🔧 Troubleshooting Guide"):
+                st.markdown("""
+                ### Common Issues & Solutions:
+                
+                #### 1️⃣ **Connection Timeout**
+                - **Cause:** API is slow or overloaded (common during video calls)
+                - **Solution:** Wait 30 seconds and try again
+                - **Prevention:** Close unnecessary apps during demo
+                
+                #### 2️⃣ **Cannot Connect to API**
+```bash
+                # Check if API container is running:
+                docker-compose ps api
+                
+                # Check API logs:
+                docker-compose logs api --tail=50
+                
+                # Restart API:
+                docker-compose restart api
+```
+                
+                #### 3️⃣ **API Running but Models Not Loaded**
+```bash
+                # Check MLflow Registry:
+                # Open http://localhost:5001 → Models
+                
+                # Trigger training via API:
+                curl -X POST http://localhost:8000/train \\
+                  -u admin:secret
+                
+                # Or via Airflow:
+                # Open http://localhost:8080 → DAGs → retrain_on_new_batch → Trigger
+```
+                
+                #### 4️⃣ **During Video Calls**
+                - API response might be slower (up to 60s)
+                - Retry mechanism will handle this automatically
+                - Consider closing other applications
+                """)
+    
+    st.markdown("---")
+    
+    # Docker Status Info
+    with st.expander("🐳 Docker Services Status"):
+        st.markdown("""
+        ### Expected Running Services:
+```bash
+        docker-compose ps
+```
+        
+        Should show:
+        - ✅ **api** (FastAPI - Port 8000)
+        - ✅ **streamlit** (This app - Port 8501)
+        - ✅ **mysql-ml** (Database - Port 3307)
+        - ✅ **mlflow-ui** (Tracking - Port 5001)
+        - ✅ **airflow-webserver** (UI - Port 8080)
+        - ✅ **airflow-scheduler** (Background tasks)
+        
+        All should be in **"Up"** state.
+        """)
 
 # ==================== MAIN APP ====================
 def main():

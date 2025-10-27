@@ -49,7 +49,7 @@ N_COMPONENTS = int(os.getenv("N_COMPONENTS", "50"))
 RANDOM_STATE = int(os.getenv("RANDOM_STATE", "42"))
 
 # deterministic subsample: keep rows where MOD(userId, BASE) == REM
-USER_MOD_BASE = int(os.getenv("TRAIN_USER_MOD_BASE", "20"))     # 20 => ~5%
+USER_MOD_BASE = int(os.getenv("TRAIN_USER_MOD_BASE", "6"))     # 20 => ~5%
 USER_MOD_REM  = int(os.getenv("TRAIN_USER_MOD_REMAINDER", "0"))
 
 # caps to bound runtime on huge tables

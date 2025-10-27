@@ -107,6 +107,13 @@ def main():
         dfr["batch_id"] = batch_id
 
         with eng.begin() as con:
+            # before creating the TEMPORARY table:
+            con.execute(text("DROP TABLE IF EXISTS tmp_ratings"))  # <-- not DROP TEMPORARY
+            con.execute(text("""
+                CREATE TEMPORARY TABLE tmp_ratings (
+                userId INT, movieId INT, rating FLOAT, timestamp BIGINT, batch_id VARCHAR(64)
+                )
+            """))
             # temp table for fast bulk load
             con.execute(text("DROP TEMPORARY TABLE IF EXISTS tmp_ratings"))
             con.execute(text("""

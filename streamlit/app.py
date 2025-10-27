@@ -245,7 +245,7 @@ def slide_3_architecture_training():
     st.markdown('<p class="slide-title">🏗️ Architecture: Training Pipeline</p>', unsafe_allow_html=True)
     
     # Show architecture diagram
-    img = load_image("images/architecture_training.png")
+    img = load_image("streamlit/images/architecture_inference.png")
     if img:
         st.image(img, caption="Training Pipeline Architecture", use_column_width=True)
     else:
@@ -308,7 +308,7 @@ def slide_4_architecture_inference():
     st.markdown('<p class="slide-title">🚀 Architecture: Inference Pipeline</p>', unsafe_allow_html=True)
     
     # Show architecture diagram
-    img = load_image("images/architecture_inference.png")
+    img = load_image("streamlit/images/architecture_training.png")
     if img:
         st.image(img, caption="Inference Pipeline Architecture", use_column_width=True)
     else:
@@ -401,57 +401,55 @@ def slide_6_data_coldstart():
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">📊 Data Pipeline & Cold Start Problem</p>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
-        st.markdown("### 🎬 MovieLens 20M Dataset")
-        st.markdown("""
-        - **20 million ratings** from 138,493 users
-        - **27,278 movies** with metadata
-        - **Rating scale**: 0.5 to 5.0 stars
-        - **Sample**: 50,000 ratings for development
-        """)
-        
+    # Row 1: Dataset bullets (full width)
+    st.markdown("### 🎬 MovieLens 20M Dataset")
+    st.markdown("""
+    - **20 million ratings** from 138,493 users
+    - **27,278 movies** with metadata
+    - **Rating scale**: 0.5 to 5.0 stars
+    - **Sample**: 50,000 ratings for development
+    """)
+
+    # Row 2: Sample Stats (left)  |  Rating distribution image (right)
+    left, right = st.columns([1.1, 1.4])
+    with left:
         st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.markdown("### 📈 Stats")
+        st.markdown("### 📈 Sample Stats")
         st.metric("Total Ratings", "50K")
         st.metric("Users", "33.2K")
         st.metric("Movies", "6.7K")
         st.metric("Sparsity", "99.98%")
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        # Show rating distribution plot
-        img = load_image("images/rating_distribution.png")
+
+    with right:
+        img = load_image("streamlit/images/rating_distribution.png")
         if img:
             st.image(img, caption="Rating Distribution Analysis", use_column_width=True)
-    
+        else:
+            st.warning("📊 Rating distribution image not found")
+
     st.markdown("---")
-    
+
+    # Row 3: Cold start analysis
     st.markdown("### ❄️ Cold Start Problem Analysis")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        # Show cold start analysis plot
-        img = load_image("images/cold_start_analysis.png")
+    c1, c2 = st.columns(2)
+    with c1:
+        img = load_image("streamlit/images/cold_start_analysis.png")
         if img:
             st.image(img, caption="Cold Start Analysis", use_column_width=True)
-    
-    with col2:
+    with c2:
         st.warning("""
         **Problem Identified:**
         - 32,423 users with <5 ratings (97.6%) 🥶
         - 4,475 movies with <5 ratings (66.5%) 🧊
         - Very sparse user-item matrix
         """)
-        
         st.success("""
         **Solution Implemented:**
-        - ✅ Popularity-based fallback for new users
-        - ✅ Content-based filtering for new movies
-        - ✅ Hybrid approach: CF + Popularity
+        - ✅ cold users → popularity fallback
+        - ✅ cold items → global-mean prediction
         """)
-    
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 def slide_7_model():
@@ -463,7 +461,7 @@ def slide_7_model():
     with col1:
         st.markdown("### 🧮 Algorithm: SVD")
         st.markdown("""
-        **Singular Value Decomposition (Truncated)**
+        **Singular Value Decomposition (Truncated) on a mean-centered user-item CSR Matrix**
         - Matrix factorization for collaborative filtering
         ...
         """)
@@ -472,19 +470,17 @@ def slide_7_model():
 from sklearn.decomposition import TruncatedSVD
 
 # Train model
-model = TruncatedSVD(
-    n_components=50,
-    random_state=42
-)
-model.fit(user_item_matrix)
+svd = TruncatedSVD(n_components=50, random_state=42)
+user_factors = svd.fit_transform(user_item_csr)   # shape: (n_users, k)
+item_factors = svd.components_                    # shape: (k, n_movies)
+global_mean = ...  # mean of all training ratings used to build the matrix
         """, language="python")
 
     # Predict
     st.code(
-        """import numpy as np
-
-    score = np.dot(user_factors, item_factors)
-    rating = np.clip(global_mean + biases + score, 0.5, 5.0)
+        """# Predict a single (u, m)
+score = float(np.dot(user_factors[u_idx], item_factors[:, m_idx]))
+rating = np.clip(global_mean + score, 0.5, 5.0)
     """,
         language="python",
     )
@@ -493,23 +489,30 @@ model.fit(user_item_matrix)
         st.markdown("### 📊 Performance Metrics")
         
         st.markdown('<div class="metric-box">', unsafe_allow_html=True)
-        st.metric("RMSE (Test)", "0.80", "-0.05 vs baseline")
-        st.metric("MAE (Test)", "0.62", "-0.03 vs baseline")
-        st.metric("Training Time", "~20s", "On 50K ratings")
-        st.metric("Predictions/sec", "~2000", "Batch inference")
+        st.metric("RMSE (Test)", "0.90")
+        st.metric("MAE (Test)", "0.69")
+        st.metric("Training Time", "~20s", "On ~8K ratings")
         st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("### 📈 Evaluation Strategy")
         st.markdown("""
-        - **Train/Test Split**: 80/20
-        - **Cross-validation**: 5-fold CV
-        - **Baseline**: Global mean + biases
-        - **Metric**: RMSE (lower is better)
-        - **Threshold**: Must beat baseline by >5%
-        - **Logging:** All runs tracked in MLflow 
-        - **Promotion:** Best model tagged @production  
+        - **deterministic holdout**: deterministic hash split (10%)
+        - **Evaluation on**: up to 1000 recent holdout user–movie pairs
+        - **Baseline**: Global mean
+        - **Metric**: RMSE and MAE to MLflow
+        - **Logging:** params, metrics, artifacts to MLflow
+        - **Promotion:** best RMSE/MAE → @production  
         """)
-    
+        
+        st.markdown("### 📈 Evaluation Strategy")
+        st.markdown("""
+        - ✅ **Fast**, scalable on sparse data; no manual features.
+        - ⚠️ No user/item biases; cold-start not handled; very large k may overfit.
+        - **Baseline**: Global mean
+        - **Metric**: RMSE and MAE to MLflow
+        - **Logging:** params, metrics, artifacts to MLflow
+        - **Promotion:** best RMSE/MAE → @production  
+        """)
     st.markdown('</div>', unsafe_allow_html=True)
 
 def slide_8_mlops():

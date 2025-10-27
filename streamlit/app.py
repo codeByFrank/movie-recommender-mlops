@@ -245,7 +245,7 @@ def slide_3_architecture_training():
     st.markdown('<p class="slide-title">🏗️ Architecture: Training Pipeline</p>', unsafe_allow_html=True)
     
     # Show architecture diagram
-    img = load_image("streamlit/images/architecture_inference.png")
+    img = load_image("images/architecture_inference.png")
     if img:
         st.image(img, caption="Training Pipeline Architecture", use_column_width=True)
     else:
@@ -308,7 +308,7 @@ def slide_4_architecture_inference():
     st.markdown('<p class="slide-title">🚀 Architecture: Inference Pipeline</p>', unsafe_allow_html=True)
     
     # Show architecture diagram
-    img = load_image("streamlit/images/architecture_training.png")
+    img = load_image("images/architecture_training.png")
     if img:
         st.image(img, caption="Inference Pipeline Architecture", use_column_width=True)
     else:
@@ -422,7 +422,7 @@ def slide_6_data_coldstart():
         st.markdown('</div>', unsafe_allow_html=True)
 
     with right:
-        img = load_image("streamlit/images/rating_distribution.png")
+        img = load_image("images/rating_distribution.png")
         if img:
             st.image(img, caption="Rating Distribution Analysis", use_column_width=True)
         else:
@@ -434,7 +434,7 @@ def slide_6_data_coldstart():
     st.markdown("### ❄️ Cold Start Problem Analysis")
     c1, c2 = st.columns(2)
     with c1:
-        img = load_image("streamlit/images/cold_start_analysis.png")
+        img = load_image("images/cold_start_analysis.png")
         if img:
             st.image(img, caption="Cold Start Analysis", use_column_width=True)
     with c2:

@@ -4,7 +4,7 @@ from requests.auth import HTTPBasicAuth
 import os
 from datetime import datetime
 import base64
-
+import time
 # ==================== CONFIGURATION ====================
 API_URL = os.getenv("API_URL", "http://api:8000")
 API_USER = os.getenv("API_BASIC_USER", "admin")

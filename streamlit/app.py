@@ -475,6 +475,23 @@ user_factors = svd.fit_transform(user_item_csr)   # shape: (n_users, k)
 item_factors = svd.components_                    # shape: (k, n_movies)
 global_mean = ...  # mean of all training ratings used to build the matrix
         """, language="python")
+        
+        st.markdown("""
+        - ***n_components*** = k ***latent factors*** (hidden directions)
+        """)
+
+        st.markdown("""
+        - ***what SVD learns***:
+            - user_factors shape = (num_users, k)
+            - item_factors shape = (k, num_movies)
+        """)
+        
+        st.markdown("""
+        - ***why Truncated***:
+            - keep only the top k directions for speed + denoising
+        """)
+
+
 
     # Predict
     st.code(
@@ -504,14 +521,10 @@ rating = np.clip(global_mean + score, 0.5, 5.0)
         - **Promotion:** best RMSE/MAE → @production  
         """)
         
-        st.markdown("### 📈 Evaluation Strategy")
+        st.markdown("### Model advantages/disadvantages")
         st.markdown("""
         - ✅ **Fast**, scalable on sparse data; no manual features.
         - ⚠️ No user/item biases; cold-start not handled; very large k may overfit.
-        - **Baseline**: Global mean
-        - **Metric**: RMSE and MAE to MLflow
-        - **Logging:** params, metrics, artifacts to MLflow
-        - **Promotion:** best RMSE/MAE → @production  
         """)
     st.markdown('</div>', unsafe_allow_html=True)
 

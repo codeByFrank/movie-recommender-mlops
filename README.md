@@ -190,10 +190,8 @@ SEP25_BMLOPS_INT_MOVIE_RECO_2/
       python .\src\data\split_ratings_into_batches.py 
 
    - (d) Create schema and load data
-      # create database and tables
-      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --init-schema"
 
-      # load movies
+      # create database and tables and load movies
       docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --load-movies /opt/airflow/repo/data/sample/movies_sample.csv"
 
       # load ratings

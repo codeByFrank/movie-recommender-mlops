@@ -524,7 +524,7 @@ rating = np.clip(global_mean + score, 0.5, 5.0)
         st.markdown("### Model advantages/disadvantages")
         st.markdown("""
         - ✅ **Fast**, scalable on sparse data; no manual features.
-        - ⚠️ No user/item biases; cold-start not handled; very large k may overfit.
+        - ⚠️ No user/item biases; cold-start very basic handled; very large k may overfit.
         """)
     st.markdown('</div>', unsafe_allow_html=True)
 

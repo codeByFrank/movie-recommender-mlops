@@ -55,7 +55,11 @@ class MovieRecommender:
     # ------------- DB helpers -------------
     def _connect(self):
         return mysql.connector.connect(
-            host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
+            host=self.db_host, 
+            user=self.db_user, 
+            password=self.db_pass, 
+            database=self.db_name,
+            ssl_disabled=False
         )
 
     def _all_movie_ids(self):
@@ -166,34 +170,42 @@ class MovieRecommender:
         n_recommendations: int = 5,
         max_candidates: int = 5000,
         batch_size: int = 2048,
-        min_popularity_count: int = 20,   # require at least N ratings to treat a movie as "popular"
+        min_popularity_count: int = 20,
+        min_user_ratings_for_personalization: int = 5,  # ← KEY: Min ratings for personalization
     ):
         """
-        Recommend top-N items for a user.
-        - If running with an MLflow model, batch-score [user_id, movie_id] pairs.
-        - If the user is cold-start (no ratings), fall back to a popularity list.
-        - If MLflow isn't loaded, use the local SVD fallback.
-        Returns: List[ {movie_id, title, genres, predicted_rating} ]
+        Recommend top-N items for a user with improved cold start handling.
+        
+        Cold Start Strategy:
+        - If user has < 5 ratings → Return popular movies (4.46★)
+        - If user has ≥ 5 ratings → Return personalized predictions
         """
-
+        
         if not getattr(self, "models_loaded", False):
             return {"error": "Models not loaded"}
 
-        # ---- small helper: popularity fallback (for cold-start or empty candidates)
+        # ---- Helper: Get popular movies (for cold start) ----
         def _popular_from_db(limit: int):
+            """Get top-rated popular movies"""
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
+                    host=self.db_host, 
+                    user=self.db_user, 
+                    password=self.db_pass, 
+                    database=self.db_name,
+                    ssl_disabled=False
                 )
                 cur = conn.cursor()
                 cur.execute(
-                    f"""
-                    SELECT m.movieId, m.title, m.genres, AVG(r.rating) AS avg_rating, COUNT(*) AS c
+                    """
+                    SELECT m.movieId, m.title, m.genres, 
+                           AVG(r.rating) AS avg_rating, 
+                           COUNT(*) AS num_ratings
                     FROM ratings r
                     JOIN movies m ON m.movieId = r.movieId
                     GROUP BY m.movieId, m.title, m.genres
-                    HAVING c >= %s
-                    ORDER BY avg_rating DESC
+                    HAVING num_ratings >= %s
+                    ORDER BY avg_rating DESC, num_ratings DESC
                     LIMIT %s
                     """,
                     (min_popularity_count, limit),
@@ -211,62 +223,97 @@ class MovieRecommender:
                     "movie_id": int(mid),
                     "title": title,
                     "genres": genres,
-                    "predicted_rating": float(avg)
+                    "predicted_rating": float(avg),
+                    "num_ratings": int(cnt),
+                    "served_by": "popularity_fallback"  # Debug flag
                 }
-                for (mid, title, genres, avg, _cnt) in rows
+                for (mid, title, genres, avg, cnt) in rows
             ]
 
         # ---------- MLflow MODE ----------
         if getattr(self, "_mode", None) == "mlflow":
-            # 0) Cold-start guard: does this user have any ratings?
+            
+            # 0) Check: How many ratings does this user have?
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
-                )
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM ratings WHERE userId=%s", (user_id,))
-                n_user_ratings = int(cur.fetchone()[0])
-            finally:
-                try:
-                    cur.close(); conn.close()
-                except Exception:
-                    pass
-
-            if n_user_ratings == 0:
-                # New user → popularity list
-                return _popular_from_db(n_recommendations)
-
-            # 1) Candidate set: movies this user hasn't rated yet
-            try:
-                conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
+                    host=self.db_host, 
+                    user=self.db_user, 
+                    password=self.db_pass, 
+                    database=self.db_name,
+                    ssl_disabled=False
                 )
                 cur = conn.cursor()
                 cur.execute(
+                    "SELECT COUNT(*) FROM ratings WHERE userId=%s", 
+                    (user_id,)
+                )
+                n_user_ratings = int(cur.fetchone()[0])
+            finally:
+                try:
+                    cur.close()
+                    conn.close()
+                except Exception:
+                    pass
+
+            # ✅ CRITICAL FIX: Use threshold, not == 0
+            if n_user_ratings < min_user_ratings_for_personalization:
+                print(f"[Cold Start] User {user_id} has only {n_user_ratings} ratings")
+                print(f"[Cold Start] Returning {n_recommendations} popular movies instead of predictions")
+                
+                popular = _popular_from_db(n_recommendations)
+                
+                if popular:
+                    return popular
+                else:
+                    print("[Error] No popular movies found in database!")
+                    return {"error": "No popular movies available"}
+
+            # ---- User has enough ratings → Personalized recommendations ----
+            
+            # 1) Get candidate movies (not yet rated by this user)
+            try:
+                conn = mysql.connector.connect(
+                    host=self.db_host, 
+                    user=self.db_user, 
+                    password=self.db_pass, 
+                    database=self.db_name,
+                    ssl_disabled=False
+                )
+                cur = conn.cursor()
+                
+                # Get popular candidates first (better than random)
+                cur.execute(
                     """
-                    SELECT m.movieId
+                    SELECT m.movieId, COUNT(r_all.rating) as popularity
                     FROM movies m
-                    LEFT JOIN ratings r
-                    ON r.movieId = m.movieId AND r.userId = %s
-                    WHERE r.userId IS NULL
+                    LEFT JOIN ratings r_all ON r_all.movieId = m.movieId
+                    LEFT JOIN ratings r_user ON r_user.movieId = m.movieId 
+                                             AND r_user.userId = %s
+                    WHERE r_user.userId IS NULL
+                    GROUP BY m.movieId
+                    HAVING popularity >= %s
+                    ORDER BY popularity DESC
                     LIMIT %s
                     """,
-                    (user_id, max_candidates),
+                    (user_id, min_popularity_count, max_candidates),
                 )
                 candidate_ids = [int(row[0]) for row in cur.fetchall()]
             finally:
                 try:
-                    cur.close(); conn.close()
+                    cur.close()
+                    conn.close()
                 except Exception:
                     pass
 
             if not candidate_ids:
-                # Nothing unrated found (rare) → popularity fallback
+                print(f"[Fallback] No unrated candidates for user {user_id}")
+                print(f"[Fallback] Returning popular movies instead")
                 return _popular_from_db(n_recommendations)
 
             # 2) Batch predict [user_id, movie_id]
             preds = []
             X_all = np.array([[user_id, mid] for mid in candidate_ids], dtype=float)
+            
             for start in range(0, len(X_all), batch_size):
                 X = X_all[start:start + batch_size]
                 y = self.model.predict(X).reshape(-1)
@@ -274,16 +321,22 @@ class MovieRecommender:
                     score = float(max(0.5, min(5.0, score)))
                     preds.append((mid, score))
 
-            # 3) Top-N by score
+            # 3) Sort by predicted score and take top-N
             preds.sort(key=lambda t: t[1], reverse=True)
             top = preds[:n_recommendations]
+            
             if not top:
+                print(f"[Fallback] No predictions generated for user {user_id}")
                 return _popular_from_db(n_recommendations)
 
-            # 4) Hydrate titles/genres in one go
+            # 4) Hydrate with movie titles and genres
             try:
                 conn = mysql.connector.connect(
-                    host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name,ssl_disabled=False
+                    host=self.db_host, 
+                    user=self.db_user, 
+                    password=self.db_pass, 
+                    database=self.db_name,
+                    ssl_disabled=False
                 )
                 cur = conn.cursor()
                 placeholders = ",".join(["%s"] * len(top))
@@ -294,7 +347,8 @@ class MovieRecommender:
                 meta = {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
             finally:
                 try:
-                    cur.close(); conn.close()
+                    cur.close()
+                    conn.close()
                 except Exception:
                     pass
 
@@ -305,54 +359,64 @@ class MovieRecommender:
                     "movie_id": mid,
                     "title": title,
                     "genres": genres,
-                    "predicted_rating": score
+                    "predicted_rating": score,
+                    "served_by": "personalized_mlflow"  # Debug flag
                 })
             return results
 
         # ---------- LOCAL SVD FALLBACK ----------
-        # (Uses the matrices loaded by _load_local_models)
         if not hasattr(self, "user_item_matrix"):
             return {"error": "Local model not available"}
 
-        # If the user is unknown locally, return popularity fallback
+        # Check if user exists in local matrix
         if user_id not in self.user_item_matrix.index:
+            print(f"[Cold Start - Local] User {user_id} not in matrix → Popular movies")
             return _popular_from_db(n_recommendations)
 
-        # Vectorized scoring for all movies, then drop those already rated
+        # Check how many ratings user has (in the matrix)
+        user_ratings = (self.user_item_matrix.loc[user_id] > 0).sum()
+        if user_ratings < min_user_ratings_for_personalization:
+            print(f"[Cold Start - Local] User {user_id} has only {user_ratings} ratings → Popular movies")
+            return _popular_from_db(n_recommendations)
+
+        # ---- Personalized recommendations with local SVD ----
         ui = self.user_item_matrix.index.get_loc(user_id)
         user_bias = self.user_means.get(user_id, self.global_mean) - self.global_mean
 
-        # dot product with all items
+        # Dot product with all items
         svd_scores = np.dot(self.user_factors[ui], self.item_factors)
 
-        # base = global + user_bias + movie_bias
+        # Add biases
         movie_biases = np.array([
             self.movie_means.get(mid, self.global_mean) - self.global_mean
             for mid in self.user_item_matrix.columns
         ])
         scores = self.global_mean + user_bias + movie_biases + svd_scores
-
-        # clamp to [0.5, 5.0]
         scores = np.clip(scores, 0.5, 5.0)
 
-        # mask already-rated
+        # Mask already-rated movies
         rated_mask = self.user_item_matrix.iloc[ui].to_numpy() > 0
         scores[rated_mask] = -np.inf
 
-        # top-N indices
+        # Get top-N
         top_idx = np.argpartition(-scores, range(min(n_recommendations, len(scores))))[:n_recommendations]
         top_idx = top_idx[np.argsort(-scores[top_idx])]
 
         top_movie_ids = [int(self.user_item_matrix.columns[i]) for i in top_idx if scores[i] != -np.inf]
-        top_scores    = [float(scores[i]) for i in top_idx if scores[i] != -np.inf]
+        top_scores = [float(scores[i]) for i in top_idx if scores[i] != -np.inf]
 
         if not top_movie_ids:
+            print(f"[Fallback - Local] No unrated movies for user {user_id}")
             return _popular_from_db(n_recommendations)
 
-        # hydrate from DB
+        # Hydrate from DB
         try:
             conn = mysql.connector.connect(
-                host=self.db_host, user=self.db_user, password=self.db_pass, database=self.db_name, ssl_disabled=False
+                host=self.db_host, 
+                user=self.db_user, 
+                password=self.db_pass, 
+                database=self.db_name, 
+                ssl_disabled=False
             )
             cur = conn.cursor()
             placeholders = ",".join(["%s"] * len(top_movie_ids))
@@ -363,7 +427,8 @@ class MovieRecommender:
             meta = {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
         finally:
             try:
-                cur.close(); conn.close()
+                cur.close()
+                conn.close()
             except Exception:
                 pass
 
@@ -374,7 +439,8 @@ class MovieRecommender:
                 "movie_id": mid,
                 "title": title,
                 "genres": genres,
-                "predicted_rating": score
+                "predicted_rating": score,
+                "served_by": "personalized_local_svd"  # Debug flag
             })
         return results
 

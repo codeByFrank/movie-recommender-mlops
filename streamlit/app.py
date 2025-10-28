@@ -225,7 +225,6 @@ def slide_2_problem():
         st.markdown("""
         **Technical Approach:**
         - **Collaborative Filtering**: SVD matrix factorization
-        - **Content-Based Fallback**: For cold start scenarios
         - **Popularity Baseline**: For completely new users
         
         **MLOps Implementation:**
@@ -234,6 +233,7 @@ def slide_2_problem():
         - 🚀 **Continuous Deployment**: Best model auto-promoted
         - 🐳 **Containerization**: Docker for reproducibility
         """)
+
     
     st.markdown("---")
     st.success("💡 **Goal**: Netflix-like recommendation system with production-grade MLOps practices")
@@ -407,7 +407,7 @@ def slide_6_data_coldstart():
     - **20 million ratings** from 138,493 users
     - **27,278 movies** with metadata
     - **Rating scale**: 0.5 to 5.0 stars
-    - **Sample**: 50,000 ratings for development
+    - **Sample**: 50,000 ratings to show this stadistics
     """)
 
     # Row 2: Sample Stats (left)  |  Rating distribution image (right)
@@ -477,38 +477,39 @@ global_mean = ...  # mean of all training ratings used to build the matrix
         """, language="python")
         
         st.markdown("""
-        - ***n_components*** = k ***latent factors*** (hidden directions)
+        - **n_components** = ***k latent factors*** (hidden directions)
         """)
 
         st.markdown("""
-        - ***what SVD learns***:
+        - **what SVD learns**:
             - user_factors shape = (num_users, k)
             - item_factors shape = (k, num_movies)
         """)
         
         st.markdown("""
-        - ***why Truncated***:
+        - **why Truncated**:
             - keep only the top k directions for speed + denoising
         """)
 
 
+        st.markdown("""
+        - **Predictions**
+        """)
 
-    # Predict
-    st.code(
-        """# Predict a single (u, m)
-score = float(np.dot(user_factors[u_idx], item_factors[:, m_idx]))
-rating = np.clip(global_mean + score, 0.5, 5.0)
-    """,
-        language="python",
-    )
+        # Predict
+        st.code(
+            """# Predict a single (u, m)
+    score = float(np.dot(user_factors[u_idx], item_factors[:, m_idx]))
+    rating = np.clip(global_mean + score, 0.5, 5.0)
+        """,
+            language="python",
+        )
     
     with col2:
         st.markdown("### 📊 Performance Metrics")
-        
-        st.markdown('<div class="metric-box">', unsafe_allow_html=True)
         st.metric("RMSE (Test)", "0.90")
         st.metric("MAE (Test)", "0.69")
-        st.metric("Training Time", "~20s", "On ~8K ratings")
+        st.metric("Training Time", "~30s", "On ~12K ratings")
         st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("### 📈 Evaluation Strategy")
@@ -521,15 +522,22 @@ rating = np.clip(global_mean + score, 0.5, 5.0)
         - **Promotion:** best RMSE/MAE → @production  
         """)
         
-        st.markdown("### Model advantages/disadvantages")
+        st.markdown("### 🔍 Model advantages/disadvantages")
         st.markdown("""
-        - ✅ **Fast**, scalable on sparse data; no manual features.
-        - ⚠️ No user/item biases; cold-start very basic handled; very large k may overfit.
+        - ✅ **Fast**, scalable on sparse data; no manual features
+        - ⚠️ **No** user/item **biases**; cold-start very basic handled
         """)
+
+        st.markdown("### ⏳ Possible Improvements")
+        st.markdown("""
+        - Content Based Fall back for Cold-Starts Scenarios
+        - Addition of User's or/and Item's Biases 
+        """)
+        
     st.markdown('</div>', unsafe_allow_html=True)
 
 def slide_8_mlops():
-    """MLOps Implementation - TAVO"""
+    """MLOps Implementation"""
     st.markdown('<div class="slide-content">', unsafe_allow_html=True)
     st.markdown('<p class="slide-title">⚙️ MLOps: Automation & Monitoring</p>', unsafe_allow_html=True)
     
@@ -541,28 +549,42 @@ def slide_8_mlops():
         st.markdown("**📅 Scheduled**")
         st.write("✅ Daily cron job (Airflow)")
         st.write("✅ Checks for new data")
-        st.write("✅ Automatic execution")
-        
+        st.write("✅ Automatic run with retries")
+
+    with col1:
+        st.markdown("**📊 Batch Intake**")
+        st.write("✅ Pull one CSV Batch from incoming if landing is empty")  
+
     with col2:
-        st.markdown("**🎯 Event-Driven**")
-        st.write("✅ New batch arrives")
-        st.write("✅ Performance degradation")
-        st.write("✅ Manual trigger available")
+        st.markdown("**💻 Train & Register**")
+        st.write("✅ Trains via FastAPI (/train) with MLflow tracking")
+        st.write("✅ Logs rmse and registers/updates MODEL_NAME")
+
+
     
+    with col3:
+        st.markdown("**🎯 Selection & Rollout**")
+        st.write("✅ Compares candidate rmse vs current @production")
+        st.write("✅ Promotes by switching MLflow alias to the better version")
+        st.write("✅ Manual rollback by re-pointing alias")
+        
     with col3:
         st.markdown("**🔍 Monitored**")
         st.write("✅ MLflow experiment tracking")
-        st.write("✅ Metric comparison")
-        st.write("✅ Model versioning")
+        st.write("✅ Metric comparison during retrain (not continuous)")
+        st.write("✅ No live dashboards/alerts yet")
+    
+    
+     
     
     st.markdown("---")
     
-    st.markdown("### 🚀 Model Deployment Strategy")
+    st.markdown("### 🚀 Automated Pipeline Steps")
     
     st.code("""
 # Airflow DAG: retrain_on_new_batch
 
-1. maybe_generate_batch_if_empty  # Create synthetic batch if needed
+1. maybe_generate_batch_if_empty   # Pulls csv from "incoming" folder, creates synthetic batch if needed. Sends it to Landing
 2. pick_batch                      # Select CSV from landing/
 3. ingest_mysql                    # Load into database
 4. train_candidate                 # Train new model via FastAPI
@@ -576,7 +598,6 @@ def slide_8_mlops():
         st.markdown("### ✅ Implemented")
         st.write("✅ Automated training pipeline")
         st.write("✅ Model versioning (MLflow)")
-        st.write("✅ A/B testing ready (production tag)")
         st.write("✅ Rollback capability")
         st.write("✅ Experiment tracking")
     

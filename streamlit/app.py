@@ -491,6 +491,13 @@ global_mean = ...  # mean of all training ratings used to build the matrix
             - keep only the top k directions for speed + denoising
         """)
 
+        st.markdown("""
+        - **It trains on**:
+            - We first divided the 20 Million ratings into 250 csv batches 
+            (80K per batch) and from every batch, the model learns only on 
+            15% of the users
+        """)
+
 
         st.markdown("""
         - **Predictions**

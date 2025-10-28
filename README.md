@@ -98,6 +98,8 @@ sep25_bmlops_int_movie_reco_2/
 |  +-- sample
 |     +-- movies_sample.csv
 |     +-- ratings_sample.csv
++-- images
+|  +-- ... (streamlit UI screenshots)
 +-- models
 +-- mysql-init
 |  +-- 01_init_mlflow.sql

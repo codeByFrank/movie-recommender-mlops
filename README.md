@@ -2,7 +2,7 @@
 
 **Machine Learning Engineering Project**  
 **Team:** Frank LEE, Gustavo SILVA BELLO, Nicole DÖHRING  
-**Mentor:** Nicolas FRADIN 
+**Mentor:** Nicolas FRADIN
 **Course:** DataScientest ML Engineering  
 **Duration:** September 15, 2025 - October 28, 2025 (5 phases)
 
@@ -19,6 +19,7 @@ Cold-start is handled via a popularity fallback.
 4. User gets 5 movie suggestions with predicted ratings
 
 **Data Pipeline:**
+
 - Downloaded MovieLens **20M** ratings dataset
 - Created **MySQL** database with clean `ratings` and `movies` tables (not SQLite)
 - Batch retraining via **Airflow** with folder flow: `data/landing → incoming → processed/failed`
@@ -26,33 +27,42 @@ Cold-start is handled via a popularity fallback.
 - Docker Compose brings up DB, API, Airflow, MLflow, Streamlit
 
 **Machine Learning Model:**
+
 - **SVD** collaborative filtering (Truncated SVD on user–item matrix)
 - Handles **cold start** (new/unknown users fall back to popularity/global baseline)
 - Predictions clipped to **[0.5, 5.0]** stars
 - Model performance (sample run): **RMSE ≈ 0.90, MAE ≈ 0.68**
 
 ## Model promotion & rollback (MLflow)
+
 - Training logs metrics and artifacts to MLflow (`movie_recommender_svd`).
 - The retrain DAG compares candidate RMSE vs current Champion.
 - If strictly better, it transitions the candidate to **Staging**/**Production** (depending on your setting).
 - **Rollback:** In MLflow UI, switch the previous version back to Production (Stage change). No code change needed.
 
 **API System:**
+
 - **FastAPI** web service
 - Main endpoint: **`/recommend`** (e.g., `?user_id=123&k=10`)
 - Interactive docs at `http://localhost:8000/docs`
 - Works with any programming language (HTTP + JSON)
 
 **Apps & Dashboards:**
+
 - **Streamlit** UI to trigger recommendations and show sample stats
 - **Airflow UI** for DAG runs (retraining pipeline)
 - **MLflow UI** for experiments, models, and stage transitions
 
+**Screenshots (Streamlit UI):**
+
+A selection of Streamlit UI screenshots lives in **`images/`**  
+(landing page, recommendations, rating prediction, popular movies, system status, outlook and more).
+
 **Analysis:**
+
 - Jupyter notebooks for data exploration
 - Charts and statistics about user behavior
 - Cold-start behavior confirmed (fallback to popularity for users with no ratings)
-
 
 ## Project Structure
 
@@ -136,40 +146,40 @@ sep25_bmlops_int_movie_reco_2/
 +-- repo_tree.py
 +-- requirements.txt
 ```
+
 ## Environment variables
 
-| Area            | Variable                | Default / Example              | Used by                          |
-|-----------------|-------------------------|--------------------------------|----------------------------------|
-| MySQL           | `DATABASE_HOST`         | `mysql-ml`                     | training (`train_model_mysql.py`)|
-|                 | `DATABASE_PORT`         | `3306`                         | training                         |
-|                 | `DATABASE_USER`         | `app`                          | training                         |
-|                 | `DATABASE_PASSWORD`     | `mysql`                        | training                         |
-|                 | `DATABASE_NAME`         | `movielens`                    | training                         |
-| MySQL (predict) | `DB_HOST`               | `mysql-ml`                     | prediction/API (`predict_model.py`) |
-|                 | `DB_PORT`               | `3306`                         | prediction/API                   |
-|                 | `DB_USER`               | `app`                          | prediction/API                   |
-|                 | `DB_PASS`               | `mysql`                        | prediction/API                   |
-|                 | `DB_NAME`               | `movielens`                    | prediction/API                   |
-| MLflow          | `MLFLOW_TRACKING_URI`   | `http://mlflow-ui:5000`        | train/predict/DAG                |
-|                 | Model name              | `movie_recommender_svd`        | (constant in code)               |
-| Airflow DAG IO  | `LANDING_DIR`           | `/opt/airflow/repo/data/landing`  | retrain DAG                   |
-|                 | `INCOMING_DIR`          | `/opt/airflow/repo/data/incoming` | retrain DAG                   |
-|                 | `PROCESSED_DIR`         | `/opt/airflow/repo/data/processed`| retrain DAG                   |
-|                 | `FAILED_DIR`            | `/opt/airflow/repo/data/failed`   | retrain DAG                   |
-| Streamlit       | `API_URL`               | `http://api:8000`              | Streamlit                        |
-|                 | `API_BASIC_USER`        | `admin`                        | Streamlit/API                    |
-|                 | `API_BASIC_PASS`        | `secret`                       | Streamlit/API                    |
-
+| Area            | Variable              | Default / Example                  | Used by                             |
+| --------------- | --------------------- | ---------------------------------- | ----------------------------------- |
+| MySQL           | `DATABASE_HOST`       | `mysql-ml`                         | training (`train_model_mysql.py`)   |
+|                 | `DATABASE_PORT`       | `3306`                             | training                            |
+|                 | `DATABASE_USER`       | `app`                              | training                            |
+|                 | `DATABASE_PASSWORD`   | `mysql`                            | training                            |
+|                 | `DATABASE_NAME`       | `movielens`                        | training                            |
+| MySQL (predict) | `DB_HOST`             | `mysql-ml`                         | prediction/API (`predict_model.py`) |
+|                 | `DB_PORT`             | `3306`                             | prediction/API                      |
+|                 | `DB_USER`             | `app`                              | prediction/API                      |
+|                 | `DB_PASS`             | `mysql`                            | prediction/API                      |
+|                 | `DB_NAME`             | `movielens`                        | prediction/API                      |
+| MLflow          | `MLFLOW_TRACKING_URI` | `http://mlflow-ui:5000`            | train/predict/DAG                   |
+|                 | Model name            | `movie_recommender_svd`            | (constant in code)                  |
+| Airflow DAG IO  | `LANDING_DIR`         | `/opt/airflow/repo/data/landing`   | retrain DAG                         |
+|                 | `INCOMING_DIR`        | `/opt/airflow/repo/data/incoming`  | retrain DAG                         |
+|                 | `PROCESSED_DIR`       | `/opt/airflow/repo/data/processed` | retrain DAG                         |
+|                 | `FAILED_DIR`          | `/opt/airflow/repo/data/failed`    | retrain DAG                         |
+| Streamlit       | `API_URL`             | `http://api:8000`                  | Streamlit                           |
+|                 | `API_BASIC_USER`      | `admin`                            | Streamlit/API                       |
+|                 | `API_BASIC_PASS`      | `secret`                           | Streamlit/API                       |
 
 ### Training knobs (documented for reproducibility)
 
-- `TRAIN_USER_MOD_BASE` (int): user-sampling modulus used during dev to speed up training (e.g., `6` means keep ~1/6 users).  
+- `TRAIN_USER_MOD_BASE` (int): user-sampling modulus used during dev to speed up training (e.g., `6` means keep ~1/6 users).
 - `EVAL_CAP` (int): optional cap on the number of interactions used for evaluation to keep runs fast in demos.
-
 
 ## How to Use the System
 
 0. Pre-requisites:
+
    - Docker Desktop installed and running
 
    - WSL2 backend enabled (Windows → Docker Desktop → Settings → Resources → WSL Integration)
@@ -179,28 +189,26 @@ sep25_bmlops_int_movie_reco_2/
    - Ports free: 8080 (Airflow), 8000 (API), 5001 (MLflow), 3306 (MySQL), 8501(Streamlit)
 
    - No virtual environment needed: Docker containers already install everything from requirements.txt.
-   You only need a .venv if you plan to run notebooks locally.
+     You only need a .venv if you plan to run notebooks locally.
    - Git (to clone the repo)
    - Create a env. file like the next one:
-      API_BASIC_USER=admin
-      API_BASIC_PASS=secret
+     API_BASIC_USER=admin
+     API_BASIC_PASS=secret
 
-      MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
-      MODEL_NAME=movie_recommender_svd
-      MODEL_URI=models:/movie_recommender_svd@production
-      MLFLOW_DISABLE_ENV_CREATION=true
+     MLFLOW_TRACKING_URI=file:/opt/airflow/mlruns
+     MODEL_NAME=movie_recommender_svd
+     MODEL_URI=models:/movie_recommender_svd@production
+     MLFLOW_DISABLE_ENV_CREATION=true
 
-      DB_HOST=mysql-ml
-      DB_USER=app
-      DB_PASS=mysql
-      DB_NAME=movielens
+     DB_HOST=mysql-ml
+     DB_USER=app
+     DB_PASS=mysql
+     DB_NAME=movielens
 
-      DATABASE_HOST=mysql-ml
-      DATABASE_USER=app
-      DATABASE_PASSWORD=mysql
-      DATABASE_NAME=movielens
-   
-
+     DATABASE_HOST=mysql-ml
+     DATABASE_USER=app
+     DATABASE_PASSWORD=mysql
+     DATABASE_NAME=movielens
 
 1. Open terminal at repo root
 
@@ -209,39 +217,40 @@ sep25_bmlops_int_movie_reco_2/
    Or cd into the project folder manually.
 
 2. Build and start all containers:
-   - docker compose down -v      # clean start (wipes old volumes)
-   - docker compose up -d --build
-   - docker compose ps 
-   Note: after running this confirm all services show "Up"
 
+   - docker compose down -v # clean start (wipes old volumes)
+   - docker compose up -d --build
+   - docker compose ps
+     Note: after running this confirm all services show "Up"
 
 3. if fresh repo + Prepare dataset and populate the database:
+
    - (a) Generate dataset sample
-      docker compose exec airflow-webserver bash -lc "cd /opt/airflow/repo && python src/data/make_dataset.py"
+     docker compose exec airflow-webserver bash -lc "cd /opt/airflow/repo && python src/data/make_dataset.py"
 
    - (b) Verify the generated files by looking in the data/raw/ml-20m. ratings and movies.csv should be there
 
    - (c) create csv batches of the big dataset, run:
-      python .\src\data\split_ratings_into_batches.py 
+     python .\src\data\split_ratings_into_batches.py
 
    - (d) Create schema and load data
 
-      - create database and tables and load movies
-      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --load-movies /opt/airflow/repo/data/sample/movies_sample.csv"
+     - create database and tables and load movies
+       docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --load-movies /opt/airflow/repo/data/sample/movies_sample.csv"
 
-      - load ratings
-      docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --batch-csv /opt/airflow/repo/data/sample/ratings_sample.csv"
+     - load ratings
+       docker compose exec airflow-webserver bash -lc "python /opt/airflow/repo/src/data/create_database_mysql.py --batch-csv /opt/airflow/repo/data/sample/ratings_sample.csv"
 
    - (e) Verify inside MySQL the number of rows, run:
-      docker compose exec -T mysql-ml mysql -N -B -uapp -pmysql -hmysql-ml -D movielens -e "SELECT COUNT(*) FROM ratings;"
+     docker compose exec -T mysql-ml mysql -N -B -uapp -pmysql -hmysql-ml -D movielens -e "SELECT COUNT(\*) FROM ratings;"
 
-      Ratings should be 0 at the time
+     Ratings should be 0 at the time
 
 4. Verify UIs are reachable
 
    - FastAPI: http://localhost:8000/docs
-      User: admin
-      Password: secret
+     User: admin
+     Password: secret
 
    - MLflow UI: http://localhost:5001
 
@@ -251,8 +260,6 @@ sep25_bmlops_int_movie_reco_2/
    docker compose exec airflow-webserver airflow users create --username recommender --password BestTeam --firstname Recommender --lastname Admin --role Admin --email recommender@example.com
 
    - Streamlit: http://localhost:8501/
-
-
 
 5. First training run:
    5.1 - Open Airflow (http://localhost:8080)
@@ -270,6 +277,7 @@ sep25_bmlops_int_movie_reco_2/
 2. Start the stack:
    ```bash
    docker compose up -d --build
+   ```
 
 ## Technical Details
 
@@ -332,9 +340,7 @@ sep25_bmlops_int_movie_reco_2/
 - [x] implement automation using Airflow or another tool to collect new data and trigger model training automatically.
 - simulate new data arrival by either splitting the CSV file into multiple parts or applying random sampling on the training set.
 
--[x] implement dockerization of the application components.
--[x] create a Docker Compose file to orchestrate the Docker images.
--[x] create a custom Docker file for the API component.
+-[x] implement dockerization of the application components. -[x] create a Docker Compose file to orchestrate the Docker images. -[x] create a custom Docker file for the API component.
 
 ## Phase 4
 

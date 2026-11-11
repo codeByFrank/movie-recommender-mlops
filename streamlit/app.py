@@ -697,7 +697,7 @@ def slide_10_conclusion():
         st.markdown("### 🚀 Key Achievements")
         st.markdown("""
         **Technical:**
-        - RMSE: 0.80 (beat baseline by 5%)
+        - RMSE: 0.90 on the test sample (MAE 0.68)
         - Response time: <500ms
         - Daily automated retraining
         - Zero-downtime deployments
